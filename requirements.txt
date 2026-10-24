@@ -1,0 +1,6 @@
+opencv-python-headless
+numpy
+pillow
+rembg
+gradio
+pytest

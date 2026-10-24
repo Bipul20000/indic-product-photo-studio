@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "indic-product-photo-studio"
+version = "0.1.0"
+description = "AI product photo tool for Indic marketplace sellers"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python-headless",
+    "numpy",
+    "pillow",
+    "rembg",
+    "gradio",
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
