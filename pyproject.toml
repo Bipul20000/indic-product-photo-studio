@@ -12,6 +12,7 @@ dependencies = [
     "opencv-python-headless",
     "numpy",
     "pillow",
+    "pillow-heif",
     "rembg",
     "gradio",
     "pytest",
