@@ -16,7 +16,6 @@ from studio.coach.checks import (
 def baseline_image():
     """Create a synthetic sharp, well-exposed, uncluttered 800x800 image."""
     img = np.full((800, 800, 3), 128, dtype=np.uint8)
-    # Add a high-contrast pattern in the center (well within border margin)
     for y in range(200, 600, 20):
         for x in range(200, 600, 20):
             if ((y // 20) + (x // 20)) % 2 == 0:
@@ -56,7 +55,7 @@ def test_gaussian_blur_fails(baseline_image):
 
 def test_sharp_object_on_flat_background_passes_blur():
     """Verify a sharp textured object on a large flat background passes blur, while blurred fails."""
-    cfg = CoachConfig(blur_min=100.0, blur_percentile="p90", load_saved_thresholds=False)
+    cfg = CoachConfig()
     img = np.full((800, 800, 3), 128, dtype=np.uint8)
     for y in range(250, 550, 15):
         for x in range(250, 550, 15):
@@ -76,19 +75,46 @@ def test_sharp_object_on_flat_background_passes_blur():
     assert "blurry" in res_blurred.tip.lower()
 
 
-def test_dark_image_fails(baseline_image):
-    """Verify that multiplying the image by 0.2 fails brightness check (too dark)."""
-    cfg = CoachConfig(load_saved_thresholds=False)
-    dark = (baseline_image * 0.2).astype(np.uint8)
-    res = check_brightness(dark, cfg)
+def test_white_background_dark_object_passes_brightness():
+    """Verify white background with a dark textured object passes brightness."""
+    cfg = CoachConfig()
+    img = np.full((800, 800, 3), 250, dtype=np.uint8)
+    for y in range(250, 550, 15):
+        for x in range(250, 550, 15):
+            img[y : y + 15, x : x + 15] = 30 if ((y // 15) + (x // 15)) % 2 == 0 else 70
+
+    res = check_brightness(img, cfg)
+    assert res.passed is True
+    assert res.tip == ""
+
+
+def test_black_background_bright_object_passes_brightness():
+    """Verify black background with a bright textured object passes brightness."""
+    cfg = CoachConfig()
+    img = np.full((800, 800, 3), 10, dtype=np.uint8)
+    for y in range(250, 550, 15):
+        for x in range(250, 550, 15):
+            img[y : y + 15, x : x + 15] = 190 if ((y // 15) + (x // 15)) % 2 == 0 else 240
+
+    res = check_brightness(img, cfg)
+    assert res.passed is True
+    assert res.tip == ""
+
+
+def test_uniformly_dark_fails_brightness():
+    """Verify that a uniformly dark image fails brightness."""
+    cfg = CoachConfig()
+    dark_img = np.full((800, 800, 3), 30, dtype=np.uint8)
+    res = check_brightness(dark_img, cfg)
     assert res.passed is False
     assert "dark" in res.tip.lower()
 
 
-def test_bright_image_fails(baseline_image):
-    """Verify that pushing pixel values near white fails brightness check (too bright)."""
-    bright = np.clip(baseline_image.astype(float) + 110, 0, 255).astype(np.uint8)
-    res = check_brightness(bright)
+def test_uniformly_near_white_fails_brightness():
+    """Verify that a uniformly near-white image fails brightness."""
+    cfg = CoachConfig()
+    bright_img = np.full((800, 800, 3), 245, dtype=np.uint8)
+    res = check_brightness(bright_img, cfg)
     assert res.passed is False
     assert "bright" in res.tip.lower()
 
@@ -103,16 +129,18 @@ def test_low_res_fails(baseline_image):
 
 def test_border_clutter_check(baseline_image):
     """Verify plain border passes clutter, while noisy border fails clutter."""
-    # Plain border on baseline
-    plain_res = check_clutter(baseline_image)
+    cfg = CoachConfig()
+    plain_res = check_clutter(baseline_image, cfg)
     assert plain_res.passed is True
 
-    # High-edge border
+    # High-edge dense border pattern
     noisy = baseline_image.copy()
-    for y in range(0, 120, 4):
-        noisy[y, :] = 255 if (y // 4) % 2 == 0 else 0
+    for y in range(0, 120, 6):
+        noisy[y, :] = 255 if (y // 6) % 2 == 0 else 0
+    for x in range(0, 120, 6):
+        noisy[:, x] = 255 if (x // 6) % 2 == 0 else 0
 
-    noisy_res = check_clutter(noisy)
+    noisy_res = check_clutter(noisy, cfg)
     assert noisy_res.passed is False
     assert "messy" in noisy_res.tip.lower()
 
@@ -121,21 +149,18 @@ def test_framing_checks():
     """Verify framing check with centered mask, tiny mask, and edge-touching mask."""
     cfg = CoachConfig()
 
-    # Mask in the middle (area ~ 25%, well inside borders)
     mask_mid = np.zeros((800, 800), dtype=np.uint8)
     mask_mid[200:600, 200:600] = 255
     res_mid = check_framing(mask_mid, cfg)
     assert res_mid.passed is True
     assert res_mid.tip == ""
 
-    # Tiny mask (area < min_product_area 15%)
     mask_tiny = np.zeros((800, 800), dtype=np.uint8)
     mask_tiny[375:425, 375:425] = 255
     res_tiny = check_framing(mask_tiny, cfg)
     assert res_tiny.passed is False
     assert "small" in res_tiny.tip.lower()
 
-    # Mask touching the edge
     mask_edge = np.zeros((800, 800), dtype=np.uint8)
     mask_edge[0:400, 200:600] = 255
     res_edge = check_framing(mask_edge, cfg)

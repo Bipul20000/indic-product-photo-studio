@@ -11,35 +11,51 @@ import numpy as np
 from studio.coach.io import load_image
 
 
-def load_excluded_filenames(exclude_path: Optional[Path]) -> Set[str]:
-    """Read configs/coach_eval_exclude.txt ignoring comments and blank lines."""
+def load_excluded_stems(exclude_path: Optional[Path]) -> Set[str]:
+    """Read configs/coach_eval_exclude.txt and extract excluded base stems."""
     if not exclude_path or not exclude_path.exists():
         return set()
-    excluded = set()
+    stems = set()
     with open(exclude_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line and not line.startswith("#"):
-                excluded.add(line)
-    return excluded
+            if not line or line.startswith("#"):
+                continue
+            entry = line.split("#")[0].strip()
+            stem = entry.replace("_orig.jpg", "").replace(".jpg", "").strip()
+            if stem:
+                stems.add(stem)
+    return stems
+
+
+def is_excluded(filename: str, excluded_stems: Set[str]) -> bool:
+    """Check if filename matches any excluded stem prefix or exact name."""
+    clean_stem = filename.replace("_orig.jpg", "").replace(".jpg", "").strip()
+    for ex in excluded_stems:
+        if clean_stem == ex or clean_stem.startswith(ex) or ex.startswith(clean_stem):
+            return True
+    return False
 
 
 def apply_blur(img: np.ndarray) -> np.ndarray:
-    """Apply Gaussian blur with sigma 6 or motion blur of length 25."""
+    """Apply Gaussian blur with sigma 6 or motion blur of length 25 at random angle 0-180 deg."""
     pick = random.choice(["gaussian", "motion"])
     if pick == "gaussian":
         return cv2.GaussianBlur(img, (0, 0), sigmaX=6.0, sigmaY=6.0)
     else:
+        angle = random.uniform(0.0, 180.0)
+        theta = np.radians(angle)
+        dx = 12.0 * np.cos(theta)
+        dy = 12.0 * np.sin(theta)
+        pt1 = (int(round(12 - dx)), int(round(12 - dy)))
+        pt2 = (int(round(12 + dx)), int(round(12 + dy)))
         k = np.zeros((25, 25), dtype=np.float32)
-        m_type = random.choice(["h", "v", "d1", "d2"])
-        if m_type == "h":
-            k[12, :] = 1.0 / 25.0
-        elif m_type == "v":
-            k[:, 12] = 1.0 / 25.0
-        elif m_type == "d1":
-            np.fill_diagonal(k, 1.0 / 25.0)
+        cv2.line(k, pt1, pt2, 1.0, thickness=1)
+        s = float(k.sum())
+        if s > 0:
+            k /= s
         else:
-            np.fill_diagonal(np.fliplr(k), 1.0 / 25.0)
+            k[12, 12] = 1.0
         return cv2.filter2D(img, -1, k)
 
 
@@ -156,12 +172,13 @@ def build_evaluation_set(
 
     valid_exts = {".jpg", ".jpeg", ".png", ".webp"}
     orig_files = sorted([p for p in originals_dir.iterdir() if p.suffix.lower() in valid_exts])
+    total_before = len(orig_files)
 
     # Filter exclusions
-    excluded_names = load_excluded_filenames(exclude_file)
-    if excluded_names:
-        orig_files = [p for p in orig_files if p.name not in excluded_names]
-        print(f"Excluded {len(excluded_names)} image(s) according to exclude file.")
+    excluded_stems = load_excluded_stems(exclude_file)
+    if excluded_stems:
+        orig_files = [p for p in orig_files if not is_excluded(p.name, excluded_stems)]
+        print(f"Originals: {total_before} before exclusion -> {len(orig_files)} after ({total_before - len(orig_files)} excluded).")
 
     if not orig_files:
         print(f"No original images found in {originals_dir}.")

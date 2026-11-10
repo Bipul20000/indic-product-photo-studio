@@ -11,54 +11,79 @@ from studio.coach.io import load_image
 
 
 def compute_features(img: np.ndarray, config: CoachConfig) -> Dict[str, float]:
-    """Compute raw feature values for Shoot Coach checks."""
+    """Compute raw feature values for Shoot Coach Phase 1d checks."""
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 and img.shape[2] == 3 else img
 
-    # Blur resized
+    # --- 1. Blur Features at 1024 longest side ---
     longest = max(h, w)
     if longest != config.blur_resize_side and longest > 0:
         scale = config.blur_resize_side / float(longest)
         new_w = max(1, int(round(w * scale)))
         new_h = max(1, int(round(h * scale)))
         interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-        gray_blur = cv2.resize(gray, (new_w, new_h), interpolation=interp)
+        gray_1024 = cv2.resize(gray, (new_w, new_h), interpolation=interp)
     else:
-        gray_blur = gray
+        gray_1024 = gray
 
-    # 8x8 tiles for blur
-    row_chunks = np.array_split(gray_blur, 8, axis=0)
-    tile_vars = []
-    for r in row_chunks:
-        for t in np.array_split(r, 8, axis=1):
-            if t.size > 0:
-                tile_vars.append(float(cv2.Laplacian(t, cv2.CV_64F).var()))
+    row_chunks = np.array_split(gray_1024, 8, axis=0)
+    scores_tile_p90 = []
+    scores_norm_p90 = []
+    scores_scale_ratio = []
 
-    p90 = float(np.percentile(tile_vars, 90)) if tile_vars else 0.0
-    p95 = float(np.percentile(tile_vars, 95)) if tile_vars else 0.0
-    p_max = float(np.max(tile_vars)) if tile_vars else 0.0
+    for r_chunk in row_chunks:
+        tiles = np.array_split(r_chunk, 8, axis=1)
+        for tile in tiles:
+            if tile.size == 0:
+                continue
+            lap_var = float(cv2.Laplacian(tile, cv2.CV_64F).var())
+            lum_var = float(np.var(tile))
 
-    # Brightness
-    mean_bright = float(np.mean(gray))
-    clipped_frac = float(np.mean((gray <= 5) | (gray >= 250)))
+            th, tw = tile.shape[:2]
+            tile_down = cv2.resize(tile, (max(1, tw // 2), max(1, th // 2)), interpolation=cv2.INTER_AREA)
+            lap_down_var = float(cv2.Laplacian(tile_down, cv2.CV_64F).var())
 
-    # Clutter
-    edges = cv2.Canny(gray, 50, 150)
-    band_h = max(1, int(round(h * config.border_band_fraction)))
-    band_w = max(1, int(round(w * config.border_band_fraction)))
-    border_mask = np.ones((h, w), dtype=bool)
-    if h > 2 * band_h and w > 2 * band_w:
-        border_mask[band_h : h - band_h, band_w : w - band_w] = False
+            scores_tile_p90.append(lap_var)
+            scores_norm_p90.append(lap_var / (lum_var + 1.0))
+            scores_scale_ratio.append(lap_var / (lap_down_var + 1e-6))
+
+    blur_tile_p90 = float(np.percentile(scores_tile_p90, 90)) if scores_tile_p90 else 0.0
+    blur_norm_p90 = float(np.percentile(scores_norm_p90, 90)) if scores_norm_p90 else 0.0
+    blur_scale_ratio = float(np.percentile(scores_scale_ratio, 90)) if scores_scale_ratio else 0.0
+
+    # --- 2. Exposure Features (Percentiles) ---
+    p95 = float(np.percentile(gray, 95))
+    p5 = float(np.percentile(gray, 5))
+
+    # --- 3. Clutter Feature at 512 longest side + GaussianBlur 5x5 ---
+    if longest != 512 and longest > 0:
+        scale_512 = 512.0 / float(longest)
+        w512 = max(1, int(round(w * scale_512)))
+        h512 = max(1, int(round(h * scale_512)))
+        interp = cv2.INTER_AREA if scale_512 < 1.0 else cv2.INTER_LINEAR
+        gray_512 = cv2.resize(gray, (w512, h512), interpolation=interp)
+    else:
+        gray_512 = gray
+
+    h512, w512 = gray_512.shape[:2]
+    blurred_512 = cv2.GaussianBlur(gray_512, (5, 5), 0)
+    edges = cv2.Canny(blurred_512, 50, 150)
+
+    band_h = max(1, int(round(h512 * config.border_band_fraction)))
+    band_w = max(1, int(round(w512 * config.border_band_fraction)))
+    border_mask = np.ones((h512, w512), dtype=bool)
+    if h512 > 2 * band_h and w512 > 2 * band_w:
+        border_mask[band_h : h512 - band_h, band_w : w512 - band_w] = False
 
     tot_border = int(np.count_nonzero(border_mask))
     clutter_density = float(np.count_nonzero((edges > 0) & border_mask) / tot_border) if tot_border > 0 else 0.0
 
     return {
-        "blur_p90": p90,
-        "blur_p95": p95,
-        "blur_max": p_max,
-        "mean_bright": mean_bright,
-        "clipped_frac": clipped_frac,
+        "blur_tile_p90": blur_tile_p90,
+        "blur_norm_p90": blur_norm_p90,
+        "blur_scale_ratio": blur_scale_ratio,
+        "lum_p95": p95,
+        "lum_p5": p5,
         "clutter_density": clutter_density,
     }
 
@@ -74,7 +99,6 @@ def find_lower_threshold(
     if n_good == 0 or n_bad == 0:
         return 0.0, 0.0, 0.0
 
-    # Candidates: all sorted unique values from both sets
     candidates = sorted(list(set(good_vals + bad_vals)))
     best_t = 0.0
     best_recall = -1.0
@@ -166,65 +190,63 @@ def main():
 
     print(f"Tune set: {len(good_samples)} good, {len(bad_blur)} bad-blur, {len(bad_dark)} bad-dark, {len(bad_bright)} bad-bright, {len(bad_clutter)} bad-clutter\n")
 
-    # 1. Blur Percentile & Threshold
+    # 1. Blur Method & Threshold Selection
+    blur_candidates = [
+        ("tile_p90", "blur_tile_p90"),
+        ("tile_norm_p90", "blur_norm_p90"),
+        ("scale_ratio", "blur_scale_ratio"),
+    ]
     blur_results = {}
-    for p_name, feat_key in [("p90", "blur_p90"), ("p95", "blur_p95"), ("max", "blur_max")]:
+    for m_name, feat_key in blur_candidates:
         g_vals = [s[feat_key] for s in good_samples]
         b_vals = [s[feat_key] for s in bad_blur]
         t, fpr, rec = find_lower_threshold(g_vals, b_vals, max_fpr=0.05)
-        blur_results[p_name] = (t, fpr, rec)
+        blur_results[m_name] = (t, fpr, rec)
 
-    best_p = max(blur_results.keys(), key=lambda k: (blur_results[k][2], -blur_results[k][1]))
-    best_blur_t, best_blur_fpr, best_blur_rec = blur_results[best_p]
+    best_blur_method = max(blur_results.keys(), key=lambda k: (blur_results[k][2], -blur_results[k][1]))
+    best_blur_t, best_blur_fpr, best_blur_rec = blur_results[best_blur_method]
 
-    # 2. Dark threshold (mean_brightness < T)
-    g_bright = [s["mean_bright"] for s in good_samples]
-    b_dark = [s["mean_bright"] for s in bad_dark]
-    dark_t, dark_fpr, dark_rec = find_lower_threshold(g_bright, b_dark, max_fpr=0.05)
+    # 2. Dark threshold (lum_p95 < T)
+    g_p95 = [s["lum_p95"] for s in good_samples]
+    b_dark = [s["lum_p95"] for s in bad_dark]
+    dark_t, dark_fpr, dark_rec = find_lower_threshold(g_p95, b_dark, max_fpr=0.05)
 
-    # 3. Bright threshold (mean_brightness > T)
-    b_bright = [s["mean_bright"] for s in bad_bright]
-    bright_t, bright_fpr, bright_rec = find_upper_threshold(g_bright, b_bright, max_fpr=0.05)
+    # 3. Bright threshold (lum_p5 > T)
+    g_p5 = [s["lum_p5"] for s in good_samples]
+    b_bright = [s["lum_p5"] for s in bad_bright]
+    bright_t, bright_fpr, bright_rec = find_upper_threshold(g_p5, b_bright, max_fpr=0.05)
 
-    # 4. Clipped fraction threshold (clipped_frac > T)
-    g_clipped = [s["clipped_frac"] for s in good_samples]
-    # For clipped, evaluate recall against bright and dark defects
-    b_clipped = [s["clipped_frac"] for s in (bad_bright + bad_dark)]
-    clip_t, clip_fpr, clip_rec = find_upper_threshold(g_clipped, b_clipped, max_fpr=0.05)
-
-    # 5. Clutter threshold (clutter_density > T)
+    # 4. Clutter threshold (clutter_density > T)
     g_clutter = [s["clutter_density"] for s in good_samples]
     b_clutter = [s["clutter_density"] for s in bad_clutter]
     clutter_t, clutter_fpr, clutter_rec = find_upper_threshold(g_clutter, b_clutter, max_fpr=0.05)
 
     # Output table
     table_rows = [
-        (f"blur_min ({best_p})", round(best_blur_t, 2), f"{best_blur_fpr * 100:.1f}%", f"{best_blur_rec * 100:.1f}%"),
-        ("dark_max_mean", round(dark_t, 2), f"{dark_fpr * 100:.1f}%", f"{dark_rec * 100:.1f}%"),
-        ("bright_min_mean", round(bright_t, 2), f"{bright_fpr * 100:.1f}%", f"{bright_rec * 100:.1f}%"),
-        ("clipped_max_fraction", round(clip_t, 4), f"{clip_fpr * 100:.1f}%", f"{clip_rec * 100:.1f}%"),
+        (f"blur_min ({best_blur_method})", round(best_blur_t, 2), f"{best_blur_fpr * 100:.1f}%", f"{best_blur_rec * 100:.1f}%"),
+        ("dark_max_p95", round(dark_t, 2), f"{dark_fpr * 100:.1f}%", f"{dark_rec * 100:.1f}%"),
+        ("bright_min_p5", round(bright_t, 2), f"{bright_fpr * 100:.1f}%", f"{bright_rec * 100:.1f}%"),
         ("clutter_max", round(clutter_t, 4), f"{clutter_fpr * 100:.1f}%", f"{clutter_rec * 100:.1f}%"),
     ]
 
-    print("=" * 68)
-    print("Shoot Coach Parameter Tuning (Split = Tune)")
-    print("=" * 68)
-    print(f"{'Metric':<25} | {'Chosen Value':>12} | {'FPR':>8} | {'Recall':>8}")
-    print("-" * 68)
+    print("=" * 70)
+    print("Shoot Coach Parameter Tuning (Phase 1d, Split = Tune)")
+    print("=" * 70)
+    print(f"{'Metric':<28} | {'Chosen Value':>12} | {'FPR':>8} | {'Recall':>8}")
+    print("-" * 70)
     for name, val, fpr, rec in table_rows:
-        print(f"{name:<25} | {val:>12} | {fpr:>8} | {rec:>8}")
-    print("-" * 68)
+        print(f"{name:<28} | {val:>12} | {fpr:>8} | {rec:>8}")
+    print("-" * 70)
 
-    print("\nBlur Percentile Comparison:")
-    for p_name, (t, fpr, rec) in blur_results.items():
-        print(f" - {p_name:<4}: threshold={t:.2f}, FPR={fpr * 100:.1f}%, recall={rec * 100:.1f}%")
+    print("\nBlur Method Evaluation:")
+    for m_name, (t, fpr, rec) in blur_results.items():
+        print(f" - {m_name:<15}: threshold={t:.2f}, FPR={fpr * 100:.1f}%, recall={rec * 100:.1f}%")
 
     thresholds_dict = {
         "blur_min": round(best_blur_t, 2),
-        "blur_percentile": best_p,
-        "dark_max_mean": round(dark_t, 2),
-        "bright_min_mean": round(bright_t, 2),
-        "clipped_max_fraction": round(clip_t, 4),
+        "blur_method": best_blur_method,
+        "dark_max_p95": round(dark_t, 2),
+        "bright_min_p5": round(bright_t, 2),
         "clutter_max": round(clutter_t, 4),
     }
 

@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Optional
@@ -20,9 +20,9 @@ class CoachConfig:
     """Configuration thresholds for Shoot Coach photo quality checks."""
 
     blur_min: float = 100.0
-    dark_max_mean: float = 60.0
-    bright_min_mean: float = 200.0
-    clipped_max_fraction: float = 0.25
+    blur_method: str = "tile_p90"
+    dark_max_p95: float = 90.0
+    bright_min_p5: float = 150.0
     min_side_px: int = 600
     clutter_max: float = 0.12
     min_product_area: float = 0.15
@@ -30,7 +30,6 @@ class CoachConfig:
     border_margin_px: int = 4
     border_band_fraction: float = 0.15
     blur_resize_side: int = 1024
-    blur_percentile: str = "p90"
     load_saved_thresholds: bool = True
 
     def __post_init__(self):

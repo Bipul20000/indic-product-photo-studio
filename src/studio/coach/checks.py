@@ -33,7 +33,7 @@ def check_resolution(img: np.ndarray, config: Optional[CoachConfig] = None) -> C
 
 
 def check_blur(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckResult:
-    """Verify image sharpness using an 8x8 tile-based Laplacian variance score."""
+    """Verify image sharpness using 8x8 tile scores based on config.blur_method."""
     if config is None:
         config = CoachConfig()
 
@@ -51,26 +51,35 @@ def check_blur(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckRe
         interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
         gray = cv2.resize(gray, (new_w, new_h), interpolation=interp)
 
-    # Split into 8x8 grid of tiles
+    method = config.blur_method.lower() if config.blur_method else "tile_p90"
+
     row_chunks = np.array_split(gray, 8, axis=0)
-    tile_vars = []
+    tile_scores = []
+
     for r_chunk in row_chunks:
         tiles = np.array_split(r_chunk, 8, axis=1)
         for tile in tiles:
-            if tile.size > 0:
-                var = float(cv2.Laplacian(tile, cv2.CV_64F).var())
-                tile_vars.append(var)
+            if tile.size == 0:
+                continue
+            lap_var = float(cv2.Laplacian(tile, cv2.CV_64F).var())
 
-    if not tile_vars:
+            if method == "tile_norm_p90":
+                lum_var = float(np.var(tile))
+                tile_scores.append(lap_var / (lum_var + 1.0))
+            elif method == "scale_ratio":
+                th, tw = tile.shape[:2]
+                down_w = max(1, tw // 2)
+                down_h = max(1, th // 2)
+                tile_down = cv2.resize(tile, (down_w, down_h), interpolation=cv2.INTER_AREA)
+                lap_down_var = float(cv2.Laplacian(tile_down, cv2.CV_64F).var())
+                tile_scores.append(lap_var / (lap_down_var + 1e-6))
+            else:  # "tile_p90"
+                tile_scores.append(lap_var)
+
+    if not tile_scores:
         blur_score = 0.0
     else:
-        perc = config.blur_percentile.lower() if config.blur_percentile else "p90"
-        if perc == "p95":
-            blur_score = float(np.percentile(tile_vars, 95))
-        elif perc == "max":
-            blur_score = float(np.max(tile_vars))
-        else:  # default p90
-            blur_score = float(np.percentile(tile_vars, 90))
+        blur_score = float(np.percentile(tile_scores, 90))
 
     passed = bool(blur_score >= config.blur_min)
     tip = (
@@ -82,7 +91,7 @@ def check_blur(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckRe
 
 
 def check_brightness(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckResult:
-    """Verify image exposure: not too dark, not too bright, and not overly clipped."""
+    """Verify image exposure using 95th and 5th percentiles of luminance."""
     if config is None:
         config = CoachConfig()
 
@@ -91,43 +100,35 @@ def check_brightness(img: np.ndarray, config: Optional[CoachConfig] = None) -> C
         return CheckResult(name="brightness", passed=False, value=0.0, tip="Image has zero dimensions.")
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 and img.shape[2] == 3 else img
-    mean_val = float(np.mean(gray))
-    clipped_frac = float(np.mean((gray <= 5) | (gray >= 250)))
+    p95 = float(np.percentile(gray, 95))
+    p5 = float(np.percentile(gray, 5))
 
-    if mean_val < config.dark_max_mean:
+    if p95 < config.dark_max_p95:
         return CheckResult(
             name="brightness",
             passed=False,
-            value=round(mean_val, 2),
+            value=round(p95, 2),
             tip="Photo is too dark. Move next to a window or turn on more light.",
         )
 
-    if mean_val > config.bright_min_mean:
+    if p5 > config.bright_min_p5:
         return CheckResult(
             name="brightness",
             passed=False,
-            value=round(mean_val, 2),
+            value=round(p5, 2),
             tip="Photo is too bright. Move away from direct harsh light or glare.",
-        )
-
-    if clipped_frac > config.clipped_max_fraction:
-        return CheckResult(
-            name="brightness",
-            passed=False,
-            value=round(clipped_frac, 4),
-            tip="Lighting has harsh glare or deep shadows. Adjust lighting for more even exposure.",
         )
 
     return CheckResult(
         name="brightness",
         passed=True,
-        value=round(mean_val, 2),
+        value=round(p95, 2),
         tip="",
     )
 
 
 def check_clutter(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckResult:
-    """Verify background cleanliness via Canny edge density in the outer 15% border band."""
+    """Verify background cleanliness via blurred Canny edge density in outer 15% border band."""
     if config is None:
         config = CoachConfig()
 
@@ -137,15 +138,31 @@ def check_clutter(img: np.ndarray, config: Optional[CoachConfig] = None) -> Chec
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 and img.shape[2] == 3 else img
 
-    # Use basic Canny edge detector
-    edges = cv2.Canny(gray, 50, 150)
+    # Resize copy to 512 on longest side
+    longest = max(h, w)
+    if longest != 512 and longest > 0:
+        scale = 512.0 / float(longest)
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        gray_512 = cv2.resize(gray, (new_w, new_h), interpolation=interp)
+    else:
+        gray_512 = gray
 
-    band_h = max(1, int(round(h * config.border_band_fraction)))
-    band_w = max(1, int(round(w * config.border_band_fraction)))
+    h512, w512 = gray_512.shape[:2]
 
-    border_mask = np.ones((h, w), dtype=bool)
-    if h > 2 * band_h and w > 2 * band_w:
-        border_mask[band_h : h - band_h, band_w : w - band_w] = False
+    # GaussianBlur 5x5 to suppress fine textures
+    blurred = cv2.GaussianBlur(gray_512, (5, 5), 0)
+
+    # Canny edges
+    edges = cv2.Canny(blurred, 50, 150)
+
+    band_h = max(1, int(round(h512 * config.border_band_fraction)))
+    band_w = max(1, int(round(w512 * config.border_band_fraction)))
+
+    border_mask = np.ones((h512, w512), dtype=bool)
+    if h512 > 2 * band_h and w512 > 2 * band_w:
+        border_mask[band_h : h512 - band_h, band_w : w512 - band_w] = False
 
     total_border_pixels = int(np.count_nonzero(border_mask))
     if total_border_pixels == 0:

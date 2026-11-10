@@ -91,8 +91,8 @@ def main():
     calib_csv_path = out_dir / "coach_calibration.csv"
 
     cfg = CoachConfig()  # Auto-loads tuned thresholds from configs/coach_thresholds.json if present
-    print(f"Using CoachConfig: blur_min={cfg.blur_min} ({cfg.blur_percentile}), dark_max_mean={cfg.dark_max_mean}, "
-          f"bright_min_mean={cfg.bright_min_mean}, clipped_max_fraction={cfg.clipped_max_fraction}, clutter_max={cfg.clutter_max}")
+    print(f"Using CoachConfig: blur_min={cfg.blur_min} ({cfg.blur_method}), dark_max_p95={cfg.dark_max_p95}, "
+          f"bright_min_p5={cfg.bright_min_p5}, clutter_max={cfg.clutter_max}")
 
     eval_records = []
     for row in label_rows:

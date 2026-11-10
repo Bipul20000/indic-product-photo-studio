@@ -1,2 +1,9 @@
-# Excluded original filenames for coach evaluation (one filename per line)
-# Lines starting with # and blank lines are ignored.
+2006-02-25_candle-flame_with_colour-shift_B_orig.jpg  # flame close-up, not a product shot
+A_Deeya_Diya_oil_lamp_with_a_swastika_sign_Hinduism_Varanasi_India_orig.jpg  # street scene
+A_lit_Diyo_orig.jpg  # lit lamp in the dark
+A_lit_Diyo_107828268_orig.jpg  # lit lamp in the dark
+Byredo_1996_scented_candle_orig.jpg  # near-black image
+Diya_an_oil_lamp_orig.jpg  # dark scene
+Florence_Leather_Market_orig.jpg  # market scene
+Niagara_Region_Water_Wagon_orig.jpg  # wagon, not a product
+Ceramic_vase_in_front_of_window_Yannoulis_Chalepas_House_Museum_Panormos_Pyrgos__orig.jpg  # museum interior
