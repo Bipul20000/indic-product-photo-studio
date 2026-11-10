@@ -16,7 +16,12 @@ dependencies = [
     "rembg",
     "gradio",
     "pytest",
+    "requests",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
