@@ -43,7 +43,7 @@ def test_make_coach_eval_builder(tmp_path: Path):
     assert out_labels_1.exists()
     with open(out_labels_1, mode="r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        assert reader.fieldnames == ["filename", "label", "reason", "source"]
+        assert reader.fieldnames == ["filename", "label", "reason", "source", "split"]
         rows = list(reader)
         assert len(rows) == 12
 
@@ -57,6 +57,9 @@ def test_make_coach_eval_builder(tmp_path: Path):
     synth_goods = [r for r in goods if r["source"] == "synthetic"]
     assert len(orig_goods) == 3
     assert len(synth_goods) == 3
+
+    for r in rows:
+        assert r["split"] in {"tune", "test"}
 
     for r in bads:
         assert r["source"] == "synthetic"

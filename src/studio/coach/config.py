@@ -1,4 +1,18 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import json
+from pathlib import Path
+from typing import Optional
+
+
+def _find_thresholds_file() -> Optional[Path]:
+    """Locate configs/coach_thresholds.json in current directory or project root."""
+    p = Path("configs/coach_thresholds.json")
+    if p.exists():
+        return p
+    p_repo = Path(__file__).resolve().parents[3] / "configs" / "coach_thresholds.json"
+    if p_repo.exists():
+        return p_repo
+    return None
 
 
 @dataclass
@@ -16,3 +30,21 @@ class CoachConfig:
     border_margin_px: int = 4
     border_band_fraction: float = 0.15
     blur_resize_side: int = 1024
+    blur_percentile: str = "p90"
+    load_saved_thresholds: bool = True
+
+    def __post_init__(self):
+        """Load threshold overrides from configs/coach_thresholds.json if available."""
+        if not self.load_saved_thresholds:
+            return
+
+        thresh_file = _find_thresholds_file()
+        if thresh_file and thresh_file.exists():
+            try:
+                with open(thresh_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                for k, v in data.items():
+                    if hasattr(self, k):
+                        setattr(self, k, v)
+            except Exception:
+                pass

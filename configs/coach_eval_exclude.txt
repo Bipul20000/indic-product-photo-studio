@@ -1,0 +1,2 @@
+# Excluded original filenames for coach evaluation (one filename per line)
+# Lines starting with # and blank lines are ignored.

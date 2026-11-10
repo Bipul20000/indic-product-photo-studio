@@ -1,0 +1,8 @@
+{
+    "blur_min": 19.9,
+    "blur_percentile": "p90",
+    "dark_max_mean": 11.47,
+    "bright_min_mean": 225.79,
+    "clipped_max_fraction": 0.7562,
+    "clutter_max": 0.1424
+}

@@ -54,10 +54,33 @@ def test_gaussian_blur_fails(baseline_image):
     assert "blurry" in res.tip.lower()
 
 
+def test_sharp_object_on_flat_background_passes_blur():
+    """Verify a sharp textured object on a large flat background passes blur, while blurred fails."""
+    cfg = CoachConfig(blur_min=100.0, blur_percentile="p90", load_saved_thresholds=False)
+    img = np.full((800, 800, 3), 128, dtype=np.uint8)
+    for y in range(250, 550, 15):
+        for x in range(250, 550, 15):
+            if ((y // 15) + (x // 15)) % 2 == 0:
+                img[y : y + 15, x : x + 15] = 20
+            else:
+                img[y : y + 15, x : x + 15] = 230
+
+    res_sharp = check_blur(img, cfg)
+    assert res_sharp.passed is True
+    assert res_sharp.value > cfg.blur_min
+
+    blurred = cv2.GaussianBlur(img, (31, 31), 0)
+    res_blurred = check_blur(blurred, cfg)
+    assert res_blurred.passed is False
+    assert res_blurred.value < cfg.blur_min
+    assert "blurry" in res_blurred.tip.lower()
+
+
 def test_dark_image_fails(baseline_image):
     """Verify that multiplying the image by 0.2 fails brightness check (too dark)."""
+    cfg = CoachConfig(load_saved_thresholds=False)
     dark = (baseline_image * 0.2).astype(np.uint8)
-    res = check_brightness(dark)
+    res = check_brightness(dark, cfg)
     assert res.passed is False
     assert "dark" in res.tip.lower()
 

@@ -33,7 +33,7 @@ def check_resolution(img: np.ndarray, config: Optional[CoachConfig] = None) -> C
 
 
 def check_blur(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckResult:
-    """Verify image sharpness using Laplacian variance on resized grayscale."""
+    """Verify image sharpness using an 8x8 tile-based Laplacian variance score."""
     if config is None:
         config = CoachConfig()
 
@@ -51,15 +51,34 @@ def check_blur(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckRe
         interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
         gray = cv2.resize(gray, (new_w, new_h), interpolation=interp)
 
-    lap = cv2.Laplacian(gray, cv2.CV_64F)
-    variance = float(lap.var())
-    passed = bool(variance >= config.blur_min)
+    # Split into 8x8 grid of tiles
+    row_chunks = np.array_split(gray, 8, axis=0)
+    tile_vars = []
+    for r_chunk in row_chunks:
+        tiles = np.array_split(r_chunk, 8, axis=1)
+        for tile in tiles:
+            if tile.size > 0:
+                var = float(cv2.Laplacian(tile, cv2.CV_64F).var())
+                tile_vars.append(var)
+
+    if not tile_vars:
+        blur_score = 0.0
+    else:
+        perc = config.blur_percentile.lower() if config.blur_percentile else "p90"
+        if perc == "p95":
+            blur_score = float(np.percentile(tile_vars, 95))
+        elif perc == "max":
+            blur_score = float(np.max(tile_vars))
+        else:  # default p90
+            blur_score = float(np.percentile(tile_vars, 90))
+
+    passed = bool(blur_score >= config.blur_min)
     tip = (
         ""
         if passed
         else "Photo is blurry. Hold the phone steady, tap on the product to focus, and take it again."
     )
-    return CheckResult(name="blur", passed=passed, value=round(variance, 2), tip=tip)
+    return CheckResult(name="blur", passed=passed, value=round(blur_score, 2), tip=tip)
 
 
 def check_brightness(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckResult:
