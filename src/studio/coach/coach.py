@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional, Tuple
 import numpy as np
 
 from studio.coach.checks import (
@@ -90,3 +90,39 @@ def assess_photo(
             tip=f"Error evaluating image: {str(exc)}",
         )
         return CoachReport(ok=False, results=[err_res], tips=[err_res.tip])
+
+
+def assess_with_segmentation(
+    img: np.ndarray,
+    config: Optional[CoachConfig] = None,
+    model: str = "isnet-general-use",
+) -> tuple[CoachReport, Any]:
+    """Segment image, run quality checks with framing assessment, and return report + segment result.
+
+    If segmentation failed, adds a tip:
+    'We could not find the product. Place it clearly in the center of a plain background.'
+    """
+    if config is None:
+        config = CoachConfig()
+
+    from studio.segment.segmenter import segment_product
+
+    seg = segment_product(img, model=model, config=config)
+
+    if seg.failed:
+        report = assess_photo(img, mask=None, config=config)
+        fail_check = CheckResult(
+            name="framing",
+            passed=False,
+            value=0.0,
+            tip="We could not find the product. Place it clearly in the center of a plain background.",
+        )
+        report.results.append(fail_check)
+        report.ok = False
+        if fail_check.tip not in report.tips:
+            report.tips.append(fail_check.tip)
+        return report, seg
+
+    report = assess_photo(img, mask=seg.mask, config=config)
+    return report, seg
+

@@ -13,7 +13,7 @@ dependencies = [
     "numpy",
     "pillow",
     "pillow-heif",
-    "rembg",
+    "rembg[cpu]",
     "gradio",
     "pytest",
     "requests",
@@ -23,5 +23,8 @@ dependencies = [
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = ["src", "."]
+markers = [
+    "slow: marks tests as slow",
+]
 

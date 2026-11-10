@@ -2,7 +2,7 @@ opencv-python-headless
 numpy
 pillow
 pillow-heif
-rembg
+rembg[cpu]
 gradio
 pytest
 requests
