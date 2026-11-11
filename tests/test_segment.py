@@ -61,19 +61,29 @@ def test_postprocess_mask_fills_small_holes():
 
 
 def test_postprocess_mask_touches_border():
-    """Touches border is accurately detected when mask reaches within border_margin_px."""
-    alpha = np.zeros((100, 100), dtype=np.uint8)
-    # Mask touching top-left border
-    alpha[0:30, 0:30] = 255
+    """Per-side contact fraction determines touches_border (corner pixel passes, strip fails)."""
+    # 1. Single corner pixel on an 800x800 image touches corner but has contact fraction < 0.08
+    alpha_corner = np.zeros((800, 800), dtype=np.uint8)
+    alpha_corner[200:600, 200:600] = 255
+    alpha_corner[0, 0] = 255
+    res_corner = postprocess_mask(alpha_corner, border_margin_px=4, cutoff_side_fraction=0.08)
+    assert res_corner.touches_border is False
+    assert res_corner.side_contact["top"] < 0.08
+    assert res_corner.side_contact["left"] < 0.08
 
-    res = postprocess_mask(alpha, border_margin_px=4)
-    assert res.touches_border is True
+    # 2. Left edge strip covering 400 rows of an 800-tall image (50% contact)
+    alpha_strip = np.zeros((800, 800), dtype=np.uint8)
+    alpha_strip[200:600, 0:100] = 255
+    res_strip = postprocess_mask(alpha_strip, border_margin_px=4, cutoff_side_fraction=0.08)
+    assert res_strip.touches_border is True
+    assert res_strip.side_contact["left"] >= 0.08
 
-    # Mask in center only
+    # 3. Mask in center only
     alpha_center = np.zeros((100, 100), dtype=np.uint8)
     alpha_center[30:70, 30:70] = 255
-    res_center = postprocess_mask(alpha_center, border_margin_px=4)
+    res_center = postprocess_mask(alpha_center, border_margin_px=4, cutoff_side_fraction=0.08)
     assert res_center.touches_border is False
+    assert all(f == 0.0 for f in res_center.side_contact.values())
 
 
 @pytest.mark.slow
@@ -94,3 +104,29 @@ def test_segment_product_with_model():
     assert result.rgba.shape == (300, 300, 4)
     assert not result.failed
     assert result.area_fraction > 0.05
+    assert result.model_used == "isnet-general-use"
+    assert "top" in result.side_contact
+
+
+@pytest.mark.slow
+def test_segment_product_fallback_to_u2net():
+    """Verify fallback from isnet-general-use to u2net when primary produces area < 0.005."""
+    try:
+        get_rembg_session("isnet-general-use")
+        get_rembg_session("u2net")
+    except Exception as exc:
+        pytest.skip(f"Models cannot be loaded offline: {exc}")
+
+    from studio.coach.io import load_image
+    from pathlib import Path
+
+    sample_path = Path("data/coach_eval/originals/good/Aromatic_candles.jpg")
+    if not sample_path.exists():
+        pytest.skip("Test image Aromatic_candles.jpg not found")
+
+    img = load_image(sample_path)
+    result = segment_product(img, model="isnet-general-use")
+    assert isinstance(result, SegmentResult)
+    assert result.model_used == "u2net"
+    assert not result.failed
+    assert result.area_fraction > 0.10

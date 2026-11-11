@@ -28,6 +28,7 @@ class CoachConfig:
     min_product_area: float = 0.15
     max_product_area: float = 0.85
     border_margin_px: int = 4
+    cutoff_side_fraction: float = 0.08
     border_band_fraction: float = 0.15
     blur_resize_side: int = 1024
     load_saved_thresholds: bool = True

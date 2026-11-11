@@ -146,7 +146,8 @@ def test_border_clutter_check(baseline_image):
 
 
 def test_framing_checks():
-    """Verify framing check with centered mask, tiny mask, and edge-touching mask."""
+    """Verify framing check: centered mask passes, corner-touching mask passes,
+    wide strip on left edge fails with side=left, and tiny mask fails for too small."""
     cfg = CoachConfig()
 
     mask_mid = np.zeros((800, 800), dtype=np.uint8)
@@ -155,17 +156,28 @@ def test_framing_checks():
     assert res_mid.passed is True
     assert res_mid.tip == ""
 
+    # A mask touching one corner pixel passes
+    mask_corner = np.zeros((800, 800), dtype=np.uint8)
+    mask_corner[200:600, 200:600] = 255
+    mask_corner[0, 0] = 255
+    res_corner = check_framing(mask_corner, cfg)
+    assert res_corner.passed is True
+    assert res_corner.tip == ""
+
+    # A mask covering a wide strip of the left edge fails with side=left
+    mask_edge = np.zeros((800, 800), dtype=np.uint8)
+    mask_edge[200:600, 0:3] = 255
+    res_edge = check_framing(mask_edge, cfg)
+    assert res_edge.passed is False
+    assert "cut off" in res_edge.tip.lower()
+    assert "left" in res_edge.tip.lower()
+
+    # Tiny mask fails for too small
     mask_tiny = np.zeros((800, 800), dtype=np.uint8)
     mask_tiny[375:425, 375:425] = 255
     res_tiny = check_framing(mask_tiny, cfg)
     assert res_tiny.passed is False
     assert "small" in res_tiny.tip.lower()
-
-    mask_edge = np.zeros((800, 800), dtype=np.uint8)
-    mask_edge[0:400, 200:600] = 255
-    res_edge = check_framing(mask_edge, cfg)
-    assert res_edge.passed is False
-    assert "cut off" in res_edge.tip.lower()
 
 
 def test_assess_photo_1x1_no_crash():

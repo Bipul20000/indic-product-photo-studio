@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional
 import cv2
 import numpy as np
 
@@ -180,8 +180,44 @@ def check_clutter(img: np.ndarray, config: Optional[CoachConfig] = None) -> Chec
     return CheckResult(name="clutter", passed=passed, value=round(density, 4), tip=tip)
 
 
+def compute_side_contact(mask: np.ndarray, border_margin_px: int = 4) -> Dict[str, float]:
+    """Compute the contact fraction for each edge (top, bottom, left, right).
+
+    Looking at the outermost border_margin_px rows/columns, a position along that edge
+    line is treated as present if any pixel in that strip is mask (> 0).
+    """
+    h, w = mask.shape[:2]
+    if h == 0 or w == 0:
+        return {"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0}
+
+    m = max(1, min(border_margin_px, h, w))
+
+    # Top: rows 0:m across columns
+    top_present = np.any(mask[:m, :] > 0, axis=0)
+    top_frac = float(np.count_nonzero(top_present) / w)
+
+    # Bottom: rows -m: across columns
+    bottom_present = np.any(mask[-m:, :] > 0, axis=0)
+    bottom_frac = float(np.count_nonzero(bottom_present) / w)
+
+    # Left: cols 0:m across rows
+    left_present = np.any(mask[:, :m] > 0, axis=1)
+    left_frac = float(np.count_nonzero(left_present) / h)
+
+    # Right: cols -m: across rows
+    right_present = np.any(mask[:, -m:] > 0, axis=1)
+    right_frac = float(np.count_nonzero(right_present) / h)
+
+    return {
+        "top": round(top_frac, 4),
+        "bottom": round(bottom_frac, 4),
+        "left": round(left_frac, 4),
+        "right": round(right_frac, 4),
+    }
+
+
 def check_framing(mask: np.ndarray, config: Optional[CoachConfig] = None) -> CheckResult:
-    """Verify product framing: area coverage and not cut off at image borders."""
+    """Verify product framing: per-side border cut-off and area coverage."""
     if config is None:
         config = CoachConfig()
 
@@ -192,25 +228,23 @@ def check_framing(mask: np.ndarray, config: Optional[CoachConfig] = None) -> Che
 
     binary = mask > 0
     product_px = int(np.count_nonzero(binary))
+    if product_px == 0:
+        return CheckResult(name="framing", passed=False, value=0.0, tip="Product mask is empty.")
+
     area_frac = float(product_px / total_px)
+    side_contact = compute_side_contact(mask, border_margin_px=config.border_margin_px)
 
-    margin = config.border_margin_px
-    if h <= 2 * margin or w <= 2 * margin:
-        touches_border = bool(np.any(binary))
-    else:
-        touches_border = bool(
-            np.any(binary[:margin, :])
-            or np.any(binary[-margin:, :])
-            or np.any(binary[:, :margin])
-            or np.any(binary[:, -margin:])
-        )
-
-    if touches_border:
+    # Cut off only if at least one side has contact fraction >= cutoff_side_fraction
+    cut_sides = [side for side, frac in side_contact.items() if frac >= config.cutoff_side_fraction]
+    if cut_sides:
+        max_side = max(side_contact, key=side_contact.get)
+        max_frac = side_contact[max_side]
+        tip = f"Your product is cut off at the {max_side}. Step back a little so the whole product is in the frame."
         return CheckResult(
             name="framing",
             passed=False,
-            value=round(area_frac, 4),
-            tip="Product is cut off at the edge. Move the phone back so the entire product is in the frame.",
+            value=round(max_frac, 4),
+            tip=tip,
         )
 
     if area_frac < config.min_product_area:

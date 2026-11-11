@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Run basic product cutout and white background compositing pipeline."""
+"""Run basic product cutout and white background compositing pipeline with diagnostics."""
 
 import argparse
+from collections import Counter
 from pathlib import Path
 import sys
-from typing import List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -102,6 +103,62 @@ def build_preview_contact_sheet(
     print(f"Saved preview contact sheet to: {out_path} ({contact_sheet.shape[1]}x{contact_sheet.shape[0]})")
 
 
+def build_cutoff_diagnostic_sheet(
+    records: List[Dict[str, Any]],
+    out_path: Path,
+    thumb_size: int = 280,
+) -> None:
+    """Write outputs/cutoff_diagnostic.jpg using images flagged as cut off under the OLD rule.
+
+    Maximum 16 images (evenly spaced if there are more).
+    Three columns: original | mask overlay (red, 40% alpha) | final white-background output.
+    Under each row print filename, the 4 side_contact values, and old and new verdicts.
+    """
+    if not records:
+        print("No images flagged under OLD cut-off rule for diagnostic sheet.")
+        return
+
+    if len(records) > 16:
+        indices = np.linspace(0, len(records) - 1, 16, dtype=int)
+        selected = [records[i] for i in indices]
+    else:
+        selected = records
+
+    row_width = thumb_size * 3  # 840 px
+    banner_height = 46
+
+    rows = []
+    for rec in selected:
+        cell_orig = make_thumbnail_cell(rec["orig"], thumb_size)
+        overlay = create_mask_overlay(rec["orig"], rec["mask"])
+        cell_overlay = make_thumbnail_cell(overlay, thumb_size)
+        cell_out = make_thumbnail_cell(rec["out_img"], thumb_size)
+        row_cells = np.hstack([cell_orig, cell_overlay, cell_out])
+
+        # Text banner below row
+        banner = np.full((banner_height, row_width, 3), 245, dtype=np.uint8)
+        banner[0:1, :] = 200  # separator line
+
+        sc = rec["side_contact"]
+        old_v = rec["old_verdict"]
+        new_v = rec["new_verdict"]
+        fn = rec["filename"]
+
+        line1 = f"{fn}   |   OLD: {old_v}   |   NEW: {new_v}"
+        line2 = f"Side contact - Top: {sc['top']:.3f}   Bottom: {sc['bottom']:.3f}   Left: {sc['left']:.3f}   Right: {sc['right']:.3f}"
+
+        cv2.putText(banner, line1, (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (20, 20, 20), 1, cv2.LINE_AA)
+        cv2.putText(banner, line2, (10, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (80, 80, 80), 1, cv2.LINE_AA)
+
+        combined_row = np.vstack([row_cells, banner])
+        rows.append(combined_row)
+
+    diagnostic_sheet = np.vstack(rows)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_path), diagnostic_sheet)
+    print(f"Saved cut-off diagnostic sheet to: {out_path} ({diagnostic_sheet.shape[1]}x{diagnostic_sheet.shape[0]}) with {len(selected)} samples.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run basic product compositing pipeline on images.")
     parser.add_argument("input", type=str, help="Image file path or directory of images.")
@@ -110,6 +167,7 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="Force composite output even if quality checks fail.")
     parser.add_argument("--exclude", type=str, default="configs/coach_eval_exclude.txt", help="Path to exclusion list.")
     parser.add_argument("--preview", type=str, default="outputs/basic_preview.jpg", help="Path for contact sheet.")
+    parser.add_argument("--diagnostic", type=str, default="outputs/cutoff_diagnostic.jpg", help="Path for cutoff diagnostic.")
 
     args = parser.parse_args()
 
@@ -117,6 +175,7 @@ def main() -> None:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     preview_path = Path(args.preview)
+    diagnostic_path = Path(args.diagnostic)
 
     # Collect files
     valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
@@ -141,16 +200,19 @@ def main() -> None:
         sys.exit(0)
 
     durations: List[float] = []
-    framing_cut_off = 0
+    cut_off_old_count = 0
+    cut_off_new_count = 0
     framing_too_small = 0
     framing_too_close = 0
     segmentation_failures = 0
+    model_usage: Counter = Counter()
     area_outliers: List[Tuple[str, float]] = []
     preview_samples: List[Tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    old_cutoff_records: List[Dict[str, Any]] = []
 
     print(f"\nProcessing {len(files)} images with preset '{args.preset}', force={args.force}...\n")
-    print(f"{'Filename':<55} | {'Verdict':<6} | {'Sec':<5} | Tips")
-    print("-" * 110)
+    print(f"{'Filename':<52} | {'Model':<9} | {'Verdict':<6} | {'Sec':<5} | Tips")
+    print("-" * 120)
 
     for p in files:
         res: PipelineResult = run_pipeline(
@@ -163,10 +225,13 @@ def main() -> None:
         durations.append(res.seconds)
         verdict = "PASS" if res.ok else "FAIL"
         tips_str = "; ".join(res.report.tips) if res.report.tips else "None"
-        filename_display = p.name if len(p.name) <= 55 else (p.name[:52] + "...")
-        print(f"{filename_display:<55} | {verdict:<6} | {res.seconds:>5.2f} | {tips_str}")
+        filename_display = p.name if len(p.name) <= 52 else (p.name[:49] + "...")
+        print(f"{filename_display:<52} | {res.segment.model_used:<9} | {verdict:<6} | {res.seconds:>5.2f} | {tips_str}")
 
-        # Metrics accounting
+        # Model used accounting
+        model_usage[res.segment.model_used] += 1
+
+        # Segmentation failures
         if res.segment.failed or res.segment.area_fraction < 0.005:
             segmentation_failures += 1
 
@@ -174,47 +239,94 @@ def main() -> None:
         if area < 0.02 or area > 0.95:
             area_outliers.append((p.name, area))
 
-        # Check framing failure types
+        # Check cut off under OLD rule vs NEW rule
+        mask = res.segment.mask
+        m = 4
+        h, w = mask.shape[:2]
+        if h <= 2 * m or w <= 2 * m:
+            old_cutoff = bool(np.any(mask > 0))
+        else:
+            old_cutoff = bool(
+                np.any(mask[:m, :] > 0)
+                or np.any(mask[-m:, :] > 0)
+                or np.any(mask[:, :m] > 0)
+                or np.any(mask[:, -m:] > 0)
+            )
+
+        if old_cutoff:
+            cut_off_old_count += 1
+
+        new_cutoff = bool(res.segment.touches_border)
+        if new_cutoff:
+            cut_off_new_count += 1
+
+        # Check framing too small and too close
         for check in res.report.results:
             if check.name == "framing" and not check.passed:
                 tip_lower = check.tip.lower()
-                if "cut off" in tip_lower:
-                    framing_cut_off += 1
-                elif "too small" in tip_lower:
+                if "too small" in tip_lower:
                     framing_too_small += 1
                 elif "too close" in tip_lower:
                     framing_too_close += 1
 
-        # Save output image if generated
+        # Save output image
         if res.image is not None:
             out_img_path = out_dir / f"{p.stem}.jpg"
             cv2.imwrite(str(out_img_path), res.image)
 
-            # Store for preview grid (up to 12)
-            if len(preview_samples) < 12:
-                orig_img = load_image(p)
-                preview_samples.append((orig_img, res.segment.mask, res.image))
+        # Store samples for basic preview grid (up to 12)
+        if len(preview_samples) < 12 and res.image is not None:
+            orig_img = load_image(p)
+            preview_samples.append((orig_img, res.segment.mask, res.image))
+
+        # Store records flagged under OLD cut-off rule for diagnostic sheet
+        if old_cutoff:
+            orig_img = load_image(p)
+            out_for_diag = res.image if res.image is not None else np.full((1000, 1000, 3), 255, dtype=np.uint8)
+            new_v = "FAIL" if not res.ok else "PASS"
+            old_cutoff_records.append({
+                "orig": orig_img,
+                "mask": res.segment.mask,
+                "out_img": out_for_diag,
+                "filename": p.name,
+                "side_contact": res.segment.side_contact,
+                "old_verdict": "FAIL",
+                "new_verdict": new_v,
+                "new_cutoff": new_cutoff,
+            })
 
     # Write preview contact sheet
     if preview_samples:
         build_preview_contact_sheet(preview_samples, preview_path)
 
+    # Write cut-off diagnostic sheet
+    if old_cutoff_records:
+        build_cutoff_diagnostic_sheet(old_cutoff_records, diagnostic_path, thumb_size=280)
+
     # Print summary report
-    print("\n" + "=" * 60)
-    print("PHASE 2 EVALUATION SUMMARY")
-    print("=" * 60)
-    print(f"Number of images processed: {len(files)}")
-    print(f"Mean processing time:       {np.mean(durations):.3f}s")
-    print(f"Max processing time:        {np.max(durations):.3f}s")
-    print("\nFraming failures breakdown:")
-    print(f"  - Cut off at edge:        {framing_cut_off}")
-    print(f"  - Product too small:      {framing_too_small}")
-    print(f"  - Product too close:      {framing_too_close}")
-    print(f"Total segmentation failures (area < 0.005): {segmentation_failures}")
-    print(f"\nArea fraction outliers (< 0.02 or > 0.95): {len(area_outliers)}")
-    for name, area in area_outliers:
-        print(f"  - {name}: area_fraction = {area:.4f}")
-    print("=" * 60)
+    print("\n" + "=" * 65)
+    print("PHASE 2a EVALUATION SUMMARY")
+    print("=" * 65)
+    print(f"Number of images processed:     {len(files)}")
+    print(f"Mean processing time:           {np.mean(durations):.3f}s")
+    print(f"Max processing time:            {np.max(durations):.3f}s")
+    print("\nFraming cut-off rule comparison:")
+    print(f"  - Cut-off failures under OLD rule: {cut_off_old_count}")
+    print(f"  - Cut-off failures under NEW rule: {cut_off_new_count}")
+    print("\nOther framing metrics:")
+    print(f"  - Product too small:          {framing_too_small}")
+    print(f"  - Product too close:          {framing_too_close}")
+    print(f"\nTotal segmentation failures:    {segmentation_failures}")
+    print("\nModel usage distribution:")
+    for model_name, count in model_usage.items():
+        print(f"  - {model_name}: {count} image(s)")
+    if area_outliers:
+        print(f"\nArea fraction outliers (< 0.02 or > 0.95): {len(area_outliers)}")
+        for name, area in area_outliers:
+            print(f"  - {name}: area_fraction = {area:.4f}")
+    else:
+        print("\nArea fraction outliers (< 0.02 or > 0.95): 0")
+    print("=" * 65)
 
 
 if __name__ == "__main__":

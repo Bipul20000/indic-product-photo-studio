@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 import cv2
 import numpy as np
 
+from studio.coach.checks import compute_side_contact
 from studio.coach.config import CoachConfig
 
 
@@ -17,8 +18,12 @@ class SegmentResult:
     rgba: np.ndarray  # uint8 BGRA 4-channel image with feathered alpha
     bbox: Tuple[int, int, int, int]  # (x, y, w, h)
     area_fraction: float  # product area / total image area
-    touches_border: bool  # touches border within border_margin_px
+    touches_border: bool  # touches border per cutoff_side_fraction
     failed: bool  # True if area_fraction < 0.005 or segmentation failed
+    side_contact: Dict[str, float] = field(
+        default_factory=lambda: {"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0}
+    )
+    model_used: str = "isnet-general-use"
 
 
 _SESSIONS: Dict[str, Any] = {}
@@ -71,6 +76,7 @@ def postprocess_mask(
     alpha: np.ndarray,
     img_bgr: Optional[np.ndarray] = None,
     border_margin_px: int = 4,
+    cutoff_side_fraction: float = 0.08,
 ) -> SegmentResult:
     """Post-process a raw alpha mask into a clean binary mask and feathered RGBA.
 
@@ -78,17 +84,21 @@ def postprocess_mask(
     2. Keep largest CC + any CC with area >= 10% of largest (multi-part products).
     3. Morphological close (5x5 ellipse) to fill small holes.
     4. Compute area fraction. If < 0.005, return empty mask and failed=True.
-    5. Compute bounding box and touches_border.
-    6. 2 px Gaussian feather on final alpha used for rgba; mask stays hard binary.
+    5. Compute per-side border contact (top, bottom, left, right) and touches_border.
+    6. Compute bounding box.
+    7. 2 px Gaussian feather on final alpha used for rgba; mask stays hard binary.
 
     Args:
         alpha: 2D uint8 predicted mask or alpha array from rembg.
         img_bgr: Optional original BGR image for creating the RGBA result.
         border_margin_px: Border margin in pixels for boundary contact check.
+        cutoff_side_fraction: Per-side contact fraction threshold for cut-off.
 
     Returns:
         SegmentResult with binary mask, BGRA image, bbox, metrics, and failed flag.
     """
+    empty_side_contact = {"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0}
+
     if alpha is None or not isinstance(alpha, np.ndarray) or alpha.size == 0 or len(alpha.shape) < 2:
         return SegmentResult(
             mask=np.zeros((0, 0), dtype=np.uint8),
@@ -97,6 +107,7 @@ def postprocess_mask(
             area_fraction=0.0,
             touches_border=False,
             failed=True,
+            side_contact=empty_side_contact,
         )
 
     h, w = alpha.shape[:2]
@@ -109,6 +120,7 @@ def postprocess_mask(
             area_fraction=0.0,
             touches_border=False,
             failed=True,
+            side_contact=empty_side_contact,
         )
 
     # 1. Threshold at 128
@@ -126,6 +138,7 @@ def postprocess_mask(
             area_fraction=0.0,
             touches_border=False,
             failed=True,
+            side_contact=empty_side_contact,
         )
 
     areas = stats[1:, cv2.CC_STAT_AREA]
@@ -140,6 +153,7 @@ def postprocess_mask(
             area_fraction=0.0,
             touches_border=False,
             failed=True,
+            side_contact=empty_side_contact,
         )
 
     min_area_thresh = 0.10 * max_area
@@ -165,23 +179,16 @@ def postprocess_mask(
             area_fraction=round(area_fraction, 4),
             touches_border=False,
             failed=True,
+            side_contact=empty_side_contact,
         )
 
     # Bounding box (x, y, w, h)
     bx, by, bw, bh = cv2.boundingRect(closed_mask)
     bbox = (int(bx), int(by), int(bw), int(bh))
 
-    # Touches border check
-    m = border_margin_px
-    if h <= 2 * m or w <= 2 * m:
-        touches_border = bool(np.any(closed_mask > 0))
-    else:
-        touches_border = bool(
-            np.any(closed_mask[:m, :] > 0)
-            or np.any(closed_mask[-m:, :] > 0)
-            or np.any(closed_mask[:, :m] > 0)
-            or np.any(closed_mask[:, -m:] > 0)
-        )
+    # Per-side contact and touches_border check
+    side_contact = compute_side_contact(closed_mask, border_margin_px=border_margin_px)
+    touches_border = bool(any(frac >= cutoff_side_fraction for frac in side_contact.values()))
 
     # 4. 2 px Gaussian feather on final alpha used for rgba
     feathered_alpha = cv2.GaussianBlur(closed_mask, (0, 0), sigmaX=2.0, sigmaY=2.0)
@@ -205,7 +212,42 @@ def postprocess_mask(
         area_fraction=round(area_fraction, 4),
         touches_border=touches_border,
         failed=False,
+        side_contact=side_contact,
     )
+
+
+def _run_single_segmentation(
+    img_bgr: np.ndarray,
+    model: str = "isnet-general-use",
+    config: Optional[CoachConfig] = None,
+) -> SegmentResult:
+    """Execute segmentation with a single model."""
+    border_margin_px = config.border_margin_px if config else 4
+    cutoff_side_fraction = config.cutoff_side_fraction if config else 0.08
+    h, w = img_bgr.shape[:2]
+
+    session = get_rembg_session(model)
+    from rembg import remove
+
+    if len(img_bgr.shape) == 2:
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2RGB)
+    elif img_bgr.shape[2] == 4:
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGRA2RGB)
+    else:
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+    raw_mask = remove(img_rgb, session=session, only_mask=True)
+    if not isinstance(raw_mask, np.ndarray):
+        raw_mask = np.array(raw_mask)
+
+    res = postprocess_mask(
+        raw_mask,
+        img_bgr=img_bgr,
+        border_margin_px=border_margin_px,
+        cutoff_side_fraction=cutoff_side_fraction,
+    )
+    res.model_used = model
+    return res
 
 
 def segment_product(
@@ -215,54 +257,74 @@ def segment_product(
 ) -> SegmentResult:
     """Segment the product from the background using rembg with robust post-processing.
 
+    If primary model returns area_fraction < 0.005, retries once with 'u2net'
+    and keeps whichever result has the larger area_fraction (ignoring results > 0.95).
     Never raises an exception on corrupt or invalid inputs.
 
     Args:
         img_bgr: Input photo as BGR uint8 NumPy array.
-        model: Model name for rembg (default 'isnet-general-use').
+        model: Primary model name for rembg (default 'isnet-general-use').
         config: Optional CoachConfig configuration thresholds.
 
     Returns:
-        SegmentResult with mask, rgba, bbox, area_fraction, touches_border, failed.
+        SegmentResult with mask, rgba, bbox, area_fraction, touches_border, failed, side_contact, model_used.
     """
-    border_margin_px = config.border_margin_px if config else 4
+    empty_side_contact = {"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0}
+
+    if img_bgr is None or not isinstance(img_bgr, np.ndarray) or img_bgr.size == 0 or len(img_bgr.shape) < 2:
+        return SegmentResult(
+            mask=np.zeros((0, 0), dtype=np.uint8),
+            rgba=np.zeros((0, 0, 4), dtype=np.uint8),
+            bbox=(0, 0, 0, 0),
+            area_fraction=0.0,
+            touches_border=False,
+            failed=True,
+            side_contact=empty_side_contact,
+            model_used=model,
+        )
+
+    h, w = img_bgr.shape[:2]
 
     try:
-        if img_bgr is None or not isinstance(img_bgr, np.ndarray) or img_bgr.size == 0 or len(img_bgr.shape) < 2:
-            return SegmentResult(
-                mask=np.zeros((0, 0), dtype=np.uint8),
-                rgba=np.zeros((0, 0, 4), dtype=np.uint8),
-                bbox=(0, 0, 0, 0),
-                area_fraction=0.0,
-                touches_border=False,
-                failed=True,
-            )
-
-        h, w = img_bgr.shape[:2]
-        session = get_rembg_session(model)
-
-        from rembg import remove
-
-        if len(img_bgr.shape) == 2:
-            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2RGB)
-        elif img_bgr.shape[2] == 4:
-            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGRA2RGB)
-        else:
-            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-
-        raw_mask = remove(img_rgb, session=session, only_mask=True)
-        if not isinstance(raw_mask, np.ndarray):
-            raw_mask = np.array(raw_mask)
-
-        return postprocess_mask(raw_mask, img_bgr=img_bgr, border_margin_px=border_margin_px)
-
+        res1 = _run_single_segmentation(img_bgr, model=model, config=config)
     except Exception:
-        h, w = (img_bgr.shape[:2]) if (img_bgr is not None and hasattr(img_bgr, "shape") and len(img_bgr.shape) >= 2) else (0, 0)
-        return SegmentResult(
+        res1 = SegmentResult(
             mask=np.zeros((h, w), dtype=np.uint8),
             rgba=np.zeros((h, w, 4), dtype=np.uint8),
             bbox=(0, 0, 0, 0),
             area_fraction=0.0,
             touches_border=False,
             failed=True,
+            side_contact=empty_side_contact,
+            model_used=model,
         )
+
+    # Segmenter fallback: if primary model returns area_fraction < 0.005, retry with u2net
+    if res1.area_fraction < 0.005 and model != "u2net":
+        try:
+            res2 = _run_single_segmentation(img_bgr, model="u2net", config=config)
+        except Exception:
+            res2 = SegmentResult(
+                mask=np.zeros((h, w), dtype=np.uint8),
+                rgba=np.zeros((h, w, 4), dtype=np.uint8),
+                bbox=(0, 0, 0, 0),
+                area_fraction=0.0,
+                touches_border=False,
+                failed=True,
+                side_contact=empty_side_contact,
+                model_used="u2net",
+            )
+
+        def _score(r: SegmentResult) -> float:
+            if r.failed or r.area_fraction > 0.95:
+                return -1.0
+            return r.area_fraction
+
+        score1 = _score(res1)
+        score2 = _score(res2)
+        if score2 > score1:
+            return res2
+        else:
+            return res1
+
+    return res1
