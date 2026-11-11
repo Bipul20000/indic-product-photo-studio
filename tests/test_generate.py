@@ -148,3 +148,58 @@ print('IMPORT_SUCCESS')
     )
     assert result.returncode == 0, f"Import failed with stderr:\n{result.stderr}"
     assert "IMPORT_SUCCESS" in result.stdout
+
+
+def test_product_family_rule_and_diverse_pick():
+    """Verify family extraction regex and diverse even spacing selection."""
+    from scripts.run_scenes import extract_family, pick_diverse_products
+
+    # 1. Family rule
+    assert extract_family("Ceramic_Mug_orig.jpg") == "ceramic_mug"
+    assert extract_family("Ceramic_Mug_2_orig.jpg") == "ceramic_mug"
+    assert extract_family("Ceramic_Mug_3_orig.jpg") == "ceramic_mug"
+    assert extract_family("Diwali_diya_49793170_orig.jpg") == "diwali_diya"
+    assert extract_family("Diwali_diya_49793178_orig.jpg") == "diwali_diya"
+    assert extract_family("Leather_Handbag_1_2_orig.jpg") == "leather_handbag"
+    assert extract_family("table_lamp_1970s_02_orig.jpg") == "table_lamp_1970s"
+
+    # 2. Deduplication to first file of each family
+    made_up_files = [
+        "brass_diya_1_orig.jpg",
+        "brass_diya_2_orig.jpg",
+        "ceramic_mug_orig.jpg",
+        "ceramic_mug_2_orig.jpg",
+        "ceramic_mug_3_orig.jpg",
+        "leather_bag_10_orig.jpg",
+        "leather_bag_20_orig.jpg",
+        "rakhi_bracelet_orig.jpg",
+        "sneakers_shoes_1_orig.jpg",
+        "water_bottle_orig.jpg",
+    ]
+
+    seen = set()
+    unique_family_files = []
+    for f in made_up_files:
+        fam = extract_family(f)
+        if fam not in seen:
+            seen.add(fam)
+            unique_family_files.append((f, fam))
+
+    assert len(unique_family_files) == 6
+    expected_families = ["brass_diya", "ceramic_mug", "leather_bag", "rakhi_bracelet", "sneakers_shoes", "water_bottle"]
+    assert [fam for _, fam in unique_family_files] == expected_families
+    assert unique_family_files[0][0] == "brass_diya_1_orig.jpg"
+    assert unique_family_files[1][0] == "ceramic_mug_orig.jpg"
+
+    # 3. Even spacing selection
+    # From 6 families, pick 3 -> indices linspace(0, 5, 3) = [0.0, 2.5, 5.0].round() = [0, 2, 5]
+    picked_3 = pick_diverse_products(unique_family_files, 3)
+    assert len(picked_3) == 3
+    assert picked_3[0][0] == "brass_diya_1_orig.jpg"
+    assert picked_3[1][0] == "leather_bag_10_orig.jpg"
+    assert picked_3[2][0] == "water_bottle_orig.jpg"
+
+    # Picking more items than available families returns all without duplicates
+    picked_all = pick_diverse_products(unique_family_files, 10)
+    assert len(picked_all) == 6
+

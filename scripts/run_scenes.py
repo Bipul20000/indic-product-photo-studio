@@ -1,9 +1,10 @@
 import argparse
 import csv
 from pathlib import Path
+import re
 import sys
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -42,6 +43,34 @@ def load_exclusions(exclude_file: Path) -> List[str]:
             if clean:
                 excl.append(clean)
     return excl
+
+
+def extract_family(filename: str) -> str:
+    """Extract product family by lowercasing, stripping '_orig', and repeatedly stripping trailing '_<digits>'."""
+    stem = Path(filename).stem.lower()
+    if stem.endswith("_orig"):
+        stem = stem[:-5]
+    while True:
+        m = re.search(r"_\d+$", stem)
+        if m:
+            stem = stem[:m.start()]
+        else:
+            break
+    return stem
+
+
+def pick_diverse_products(family_items: List[Tuple[Any, str]], n: int) -> List[Tuple[Any, str]]:
+    """Pick n items evenly spaced across unique families using np.linspace with duplicates removed."""
+    if len(family_items) <= n:
+        return list(family_items)
+    indices = np.linspace(0, len(family_items) - 1, n).round().astype(int)
+    chosen = []
+    seen_idx = set()
+    for idx in indices:
+        if idx not in seen_idx:
+            seen_idx.add(idx)
+            chosen.append(family_items[idx])
+    return chosen
 
 
 def make_thumb(image: np.ndarray, target_w: int = 224, target_h: int = 224) -> np.ndarray:
@@ -185,11 +214,11 @@ def main():
     valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".bmp"}
     all_files = sorted([p for p in originals_dir.iterdir() if p.suffix.lower() in valid_exts], key=lambda p: p.name)
 
-    selected_products = []
+    passing_products = []
     gate_records = []
     skipped_count = 0
 
-    print(f"Selecting up to {args.n_products} qualifying products from {len(all_files)} originals...")
+    print(f"Gating {len(all_files)} originals with Shoot Coach...")
 
     for img_p in all_files:
         # Check exclusion prefix
@@ -212,7 +241,7 @@ def main():
         })
 
         if report.ok:
-            selected_products.append({
+            passing_products.append({
                 "path": img_p,
                 "filename": img_p.name,
                 "stem": img_p.stem,
@@ -220,8 +249,6 @@ def main():
                 "report": report,
                 "seg": seg,
             })
-            if len(selected_products) >= args.n_products:
-                break
         else:
             skipped_count += 1
 
@@ -232,7 +259,27 @@ def main():
         writer.writeheader()
         writer.writerows(gate_records)
 
-    print(f"Coach gate complete: {len(selected_products)} passed, {skipped_count} skipped. Decisions saved to: {gate_csv_path}")
+    print(f"Coach gate complete: {len(passing_products)} passed, {skipped_count} skipped. Decisions saved to: {gate_csv_path}")
+
+    # Deduplicate by family (keeping first of each family in sorted order)
+    seen_families = set()
+    family_products: List[Tuple[Dict, str]] = []
+    for prod in passing_products:
+        fam = extract_family(prod["filename"])
+        if fam not in seen_families:
+            seen_families.add(fam)
+            family_products.append((prod, fam))
+
+    print(f"Found {len(family_products)} unique product families among passing originals.")
+
+    # Pick n-products evenly spaced
+    chosen_items = pick_diverse_products(family_products, args.n_products)
+    selected_products = [item[0] for item in chosen_items]
+
+    # Print chosen filenames and family names before generating
+    print(f"\nChosen {len(chosen_items)} products across diverse families:")
+    for idx, (p_info, fam) in enumerate(chosen_items, start=1):
+        print(f"  {idx}. {p_info['filename']}  (family: '{fam}')")
 
     # 2. Generation per product, scene, and seed
     white_dir = out_dir / "white"
