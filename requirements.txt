@@ -6,3 +6,4 @@ rembg[cpu]
 gradio
 pytest
 requests
+pyyaml

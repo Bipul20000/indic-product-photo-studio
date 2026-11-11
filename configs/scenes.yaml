@@ -1,0 +1,20 @@
+negative: "text, letters, watermark, logo, people, hands, distorted, deformed, low quality, blurry, oversaturated"
+
+scenes:
+  diwali:
+    prompt: "professional product photo of {product} on a polished wooden table, warm Diwali festive background, softly blurred glowing brass diyas and marigold flowers, golden bokeh lights, warm evening light, shallow depth of field"
+
+  raksha_bandhan:
+    prompt: "professional product photo of {product} on a table with a Raksha Bandhan festive setting, colorful rakhis, a silk cloth and rose petals softly blurred in the background, soft daylight, shallow depth of field"
+
+  holi:
+    prompt: "professional product photo of {product} on a clean white surface, Holi festival colors, soft clouds of pink, yellow and blue gulal powder in the blurred background, bright cheerful daylight, shallow depth of field"
+
+  wedding:
+    prompt: "professional product photo of {product} on an ornate table, Indian wedding decor, red and gold fabric, jasmine and marigold garlands, soft golden light, shallow depth of field"
+
+  indian_home:
+    prompt: "professional product photo of {product} on a wooden table in a warm Indian home interior, a brass lamp and curtains softly blurred in the background, natural window light, shallow depth of field"
+
+  minimal:
+    prompt: "professional product photo of {product} on a clean light beige studio surface, simple soft gradient background, soft diffused studio lighting, subtle shadow"
