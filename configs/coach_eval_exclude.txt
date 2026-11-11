@@ -7,3 +7,9 @@ Diya_an_oil_lamp_orig.jpg  # dark scene
 Florence_Leather_Market_orig.jpg  # market scene
 Niagara_Region_Water_Wagon_orig.jpg  # wagon, not a product
 Ceramic_vase_in_front_of_window_Yannoulis_Chalepas_House_Museum_Panormos_Pyrgos__orig.jpg  # museum interior
+Alexei_Leonov  # not a product photo (scene or portrait)
+Backpack_small  # not a product photo (scene or portrait)
+Backpack_through_glass  # not a product photo (scene or portrait)
+Diya_Pujan_at_Ganga_Aarti_at_Dashashwamedh_Ghat_Varanasi  # not a product photo (scene or portrait)
+HK_CWB_Saint_Mary  # not a product photo (scene or portrait)
+Initially_the_community_used_to_make_brass_vessels  # not a product photo (scene or portrait)

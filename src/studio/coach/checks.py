@@ -14,6 +14,7 @@ class CheckResult:
     passed: bool
     value: float
     tip: str
+    used_fallback: bool = False
 
 
 def check_resolution(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckResult:
@@ -90,8 +91,15 @@ def check_blur(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckRe
     return CheckResult(name="blur", passed=passed, value=round(blur_score, 2), tip=tip)
 
 
-def check_brightness(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckResult:
-    """Verify image exposure using 95th and 5th percentiles of luminance."""
+def check_brightness(
+    img: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    config: Optional[CoachConfig] = None,
+) -> CheckResult:
+    """Verify image exposure using configurable dark and bright feature candidates with mask support."""
+    if isinstance(mask, CoachConfig) and config is None:
+        config = mask
+        mask = None
     if config is None:
         config = CoachConfig()
 
@@ -100,35 +108,109 @@ def check_brightness(img: np.ndarray, config: Optional[CoachConfig] = None) -> C
         return CheckResult(name="brightness", passed=False, value=0.0, tip="Image has zero dimensions.")
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 and img.shape[2] == 3 else img
-    p95 = float(np.percentile(gray, 95))
-    p5 = float(np.percentile(gray, 5))
+    total_px = h * w
 
-    if p95 < config.dark_max_p95:
+    # Determine if mask is valid and >= 2% of image
+    has_valid_mask = (
+        mask is not None
+        and isinstance(mask, np.ndarray)
+        and mask.size > 0
+        and len(mask.shape) >= 2
+        and (int(np.count_nonzero(mask > 0)) / total_px) >= 0.02
+    )
+
+    # Dark check
+    dark_feat = config.dark_feature
+    dark_t = config.dark_threshold if config.dark_threshold is not None else config.dark_max_p95
+    used_fb_dark = False
+
+    if dark_feat == "global_p95":
+        dark_val = float(np.percentile(gray, 95))
+        dark_failed = dark_val < dark_t
+    elif dark_feat in ("product_p95", "product_p50"):
+        if has_valid_mask:
+            p = 95 if dark_feat == "product_p95" else 50
+            dark_val = float(np.percentile(gray[mask > 0], p))
+            dark_failed = dark_val < dark_t
+        else:
+            dark_val = float(np.percentile(gray, 95))
+            dark_failed = dark_val < config.dark_max_p95
+            used_fb_dark = True
+    else:
+        dark_val = float(np.percentile(gray, 95))
+        dark_failed = dark_val < dark_t
+
+    # Bright check
+    bright_feat = config.bright_feature
+    bright_t = config.bright_threshold if config.bright_threshold is not None else config.bright_min_p5
+    used_fb_bright = False
+
+    if bright_feat == "global_p5":
+        bright_val = float(np.percentile(gray, 5))
+        bright_failed = bright_val > bright_t
+    elif bright_feat == "product_p5":
+        if has_valid_mask:
+            bright_val = float(np.percentile(gray[mask > 0], 5))
+            bright_failed = bright_val > bright_t
+        else:
+            bright_val = float(np.percentile(gray, 5))
+            bright_failed = bright_val > config.bright_min_p5
+            used_fb_bright = True
+    elif bright_feat == "product_clip_hi":
+        if has_valid_mask:
+            prod_px = gray[mask > 0]
+            bright_val = float(np.count_nonzero(prod_px >= 250) / prod_px.size)
+            bright_failed = bright_val > bright_t
+        else:
+            bright_val = float(np.percentile(gray, 5))
+            bright_failed = bright_val > config.bright_min_p5
+            used_fb_bright = True
+    else:
+        bright_val = float(np.percentile(gray, 5))
+        bright_failed = bright_val > bright_t
+
+    used_fb = used_fb_dark or used_fb_bright
+
+    if dark_failed:
         return CheckResult(
             name="brightness",
             passed=False,
-            value=round(p95, 2),
+            value=round(dark_val, 4),
             tip="Photo is too dark. Move next to a window or turn on more light.",
+            used_fallback=used_fb_dark,
         )
 
-    if p5 > config.bright_min_p5:
+    if bright_failed:
         return CheckResult(
             name="brightness",
             passed=False,
-            value=round(p5, 2),
+            value=round(bright_val, 4),
             tip="Photo is too bright. Move away from direct harsh light or glare.",
+            used_fallback=used_fb_bright,
         )
 
     return CheckResult(
         name="brightness",
         passed=True,
-        value=round(p95, 2),
+        value=round(dark_val, 4),
         tip="",
+        used_fallback=used_fb,
     )
 
 
-def check_clutter(img: np.ndarray, config: Optional[CoachConfig] = None) -> CheckResult:
-    """Verify background cleanliness via blurred Canny edge density in outer 15% border band."""
+# Alias check_exposure to check_brightness
+check_exposure = check_brightness
+
+
+def check_clutter(
+    img: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    config: Optional[CoachConfig] = None,
+) -> CheckResult:
+    """Verify background cleanliness via configurable candidate features with mask support."""
+    if isinstance(mask, CoachConfig) and config is None:
+        config = mask
+        mask = None
     if config is None:
         config = CoachConfig()
 
@@ -137,47 +219,110 @@ def check_clutter(img: np.ndarray, config: Optional[CoachConfig] = None) -> Chec
         return CheckResult(name="clutter", passed=False, value=0.0, tip="Image has zero dimensions.")
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 and img.shape[2] == 3 else img
+    total_px = h * w
+
+    # Determine if mask is valid and >= 2% of image
+    has_valid_mask = (
+        mask is not None
+        and isinstance(mask, np.ndarray)
+        and mask.size > 0
+        and len(mask.shape) >= 2
+        and (int(np.count_nonzero(mask > 0)) / total_px) >= 0.02
+    )
 
     # Resize copy to 512 on longest side
     longest = max(h, w)
     if longest != 512 and longest > 0:
         scale = 512.0 / float(longest)
-        new_w = max(1, int(round(w * scale)))
-        new_h = max(1, int(round(h * scale)))
+        w512 = max(1, int(round(w * scale)))
+        h512 = max(1, int(round(h * scale)))
         interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-        gray_512 = cv2.resize(gray, (new_w, new_h), interpolation=interp)
+        gray_512 = cv2.resize(gray, (w512, h512), interpolation=interp)
     else:
         gray_512 = gray
+        w512, h512 = w, h
 
-    h512, w512 = gray_512.shape[:2]
-
-    # GaussianBlur 5x5 to suppress fine textures
     blurred = cv2.GaussianBlur(gray_512, (5, 5), 0)
-
-    # Canny edges
     edges = cv2.Canny(blurred, 50, 150)
 
+    # Compute global border density (outer 15% band)
     band_h = max(1, int(round(h512 * config.border_band_fraction)))
     band_w = max(1, int(round(w512 * config.border_band_fraction)))
-
     border_mask = np.ones((h512, w512), dtype=bool)
     if h512 > 2 * band_h and w512 > 2 * band_w:
         border_mask[band_h : h512 - band_h, band_w : w512 - band_w] = False
 
-    total_border_pixels = int(np.count_nonzero(border_mask))
-    if total_border_pixels == 0:
-        density = 0.0
-    else:
-        edge_pixels_in_border = int(np.count_nonzero((edges > 0) & border_mask))
-        density = float(edge_pixels_in_border / total_border_pixels)
-
-    passed = bool(density <= config.clutter_max)
-    tip = (
-        ""
-        if passed
-        else "Background looks messy. Place the product on a plain sheet or table."
+    tot_border = int(np.count_nonzero(border_mask))
+    global_border_val = (
+        float(np.count_nonzero((edges > 0) & border_mask) / tot_border)
+        if tot_border > 0
+        else 0.0
     )
-    return CheckResult(name="clutter", passed=passed, value=round(density, 4), tip=tip)
+
+    clutter_feat = config.clutter_feature
+    clutter_t = config.clutter_threshold if config.clutter_threshold is not None else config.clutter_max
+
+    if clutter_feat == "global_border":
+        passed = bool(global_border_val <= clutter_t)
+        return CheckResult(
+            name="clutter",
+            passed=passed,
+            value=round(global_border_val, 4),
+            tip="" if passed else "Background looks messy. Place the product on a plain sheet or table.",
+            used_fallback=False,
+        )
+
+    # Product-based clutter feature requested
+    if not has_valid_mask:
+        passed = bool(global_border_val <= config.clutter_max)
+        return CheckResult(
+            name="clutter",
+            passed=passed,
+            value=round(global_border_val, 4),
+            tip="" if passed else "Background looks messy. Place the product on a plain sheet or table.",
+            used_fallback=True,
+        )
+
+    # Valid mask: compute background outside mask dilated by 15 px
+    mask_512 = cv2.resize(mask, (w512, h512), interpolation=cv2.INTER_NEAREST)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+    dilated = cv2.dilate((mask_512 > 0).astype(np.uint8), kernel)
+    bg_mask = (dilated == 0)
+    bg_px = int(np.count_nonzero(bg_mask))
+
+    # Skip and pass if background is under 10% of image
+    if bg_px / (h512 * w512) < 0.10:
+        return CheckResult(name="clutter", passed=True, value=0.0, tip="", used_fallback=False)
+
+    if clutter_feat == "bg_edge_density":
+        density = float(np.count_nonzero((edges > 0) & bg_mask) / bg_px)
+        passed = bool(density <= clutter_t)
+        return CheckResult(
+            name="clutter",
+            passed=passed,
+            value=round(density, 4),
+            tip="" if passed else "Background looks messy. Place the product on a plain sheet or table.",
+            used_fallback=False,
+        )
+    elif clutter_feat == "bg_lum_std":
+        std = float(np.std(blurred[bg_mask]))
+        passed = bool(std <= clutter_t)
+        return CheckResult(
+            name="clutter",
+            passed=passed,
+            value=round(std, 2),
+            tip="" if passed else "Background looks messy. Place the product on a plain sheet or table.",
+            used_fallback=False,
+        )
+    else:
+        passed = bool(global_border_val <= clutter_t)
+        return CheckResult(
+            name="clutter",
+            passed=passed,
+            value=round(global_border_val, 4),
+            tip="" if passed else "Background looks messy. Place the product on a plain sheet or table.",
+            used_fallback=False,
+        )
 
 
 def compute_side_contact(mask: np.ndarray, border_margin_px: int = 4) -> Dict[str, float]:

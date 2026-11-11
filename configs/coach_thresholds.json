@@ -1,7 +1,13 @@
 {
-    "blur_min": 72.86,
     "blur_method": "tile_p90",
-    "dark_max_p95": 104.0,
-    "bright_min_p5": 131.0,
-    "clutter_max": 0.1277
+    "blur_min": 76.03,
+    "dark_feature": "global_p95",
+    "dark_threshold": 153.0,
+    "dark_max_p95": 153.0,
+    "bright_feature": "product_clip_hi",
+    "bright_threshold": 0.0485,
+    "bright_min_p5": 95.0,
+    "clutter_feature": "bg_lum_std",
+    "clutter_threshold": 69.8934,
+    "clutter_max": 0.1164
 }

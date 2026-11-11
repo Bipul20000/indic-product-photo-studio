@@ -1,12 +1,12 @@
-import csv
 from collections import defaultdict
+import csv
 from pathlib import Path
 import sys
 from typing import Dict, List
-from studio.coach import CoachConfig, assess_photo, load_image
-from studio.env import get_output_dir
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".bmp", ".tiff"}
+from studio.coach import CoachConfig, assess_photo, load_image
+from studio.coach.mask_cache import get_mask
+from studio.env import get_output_dir
 
 
 def format_confusion_matrix(matrix: Dict[tuple, int]) -> str:
@@ -20,7 +20,7 @@ def format_confusion_matrix(matrix: Dict[tuple, int]) -> str:
     return "\n".join(lines)
 
 
-def print_split_report(split_title: str, records: List[Dict]):
+def print_split_report(split_title: str, records: List[Dict]) -> None:
     total = len(records)
     if total == 0:
         print(f"\n--- {split_title} --- (0 images)")
@@ -42,12 +42,16 @@ def print_split_report(split_title: str, records: List[Dict]):
     orig_fa = sum(1 for r in good_origs if r["coach_verdict"] == "bad")
     orig_far = (orig_fa / len(good_origs) * 100.0) if good_origs else 0.0
 
+    fb_count = sum(1 for r in records if r["used_fallback"])
+    fb_pct = (fb_count / total * 100.0) if total > 0 else 0.0
+
     print(f"\n=================================================================")
     print(f"--- {split_title} ---")
     print(f"=================================================================")
     print(f"Total Evaluated: {total}")
     print(f"Overall Accuracy: {accuracy:.1f}%")
     print(f"False Alarm Rate on Good Originals: {orig_far:.1f}% ({orig_fa}/{len(good_origs)} rejected)")
+    print(f"Fraction using Fallback: {fb_pct:.1f}% ({fb_count}/{total} images)")
     print("\nConfusion Matrix:")
     print(format_confusion_matrix(matrix))
 
@@ -69,7 +73,7 @@ def print_split_report(split_title: str, records: List[Dict]):
     print("-" * 48)
 
 
-def main():
+def main() -> None:
     eval_dir = Path("data/coach_eval")
     images_dir = eval_dir / "images"
     labels_path = eval_dir / "labels.csv"
@@ -90,9 +94,9 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     calib_csv_path = out_dir / "coach_calibration.csv"
 
-    cfg = CoachConfig()  # Auto-loads tuned thresholds from configs/coach_thresholds.json if present
-    print(f"Using CoachConfig: blur_min={cfg.blur_min} ({cfg.blur_method}), dark_max_p95={cfg.dark_max_p95}, "
-          f"bright_min_p5={cfg.bright_min_p5}, clutter_max={cfg.clutter_max}")
+    cfg = CoachConfig()  # Auto-loads tuned thresholds from configs/coach_thresholds.json
+    print(f"Using CoachConfig: blur_min={cfg.blur_min} ({cfg.blur_method}), dark_feature={cfg.dark_feature} (T={cfg.dark_threshold}), "
+          f"bright_feature={cfg.bright_feature} (T={cfg.bright_threshold}), clutter_feature={cfg.clutter_feature} (T={cfg.clutter_threshold})")
 
     eval_records = []
     for row in label_rows:
@@ -112,7 +116,8 @@ def main():
 
         try:
             img = load_image(img_path)
-            report = assess_photo(img, config=cfg)
+            mask = get_mask(img_path, key=filename)
+            report = assess_photo(img, mask=mask, config=cfg)
         except Exception as e:
             print(f"Error processing {filename}: {e}")
             continue
@@ -120,6 +125,7 @@ def main():
         coach_verdict = "good" if report.ok else "bad"
         res_dict = {r.name: r for r in report.results}
         tips_str = " | ".join(report.tips) if report.tips else ""
+        used_fb = any(r.used_fallback for r in report.results)
 
         failing_checks = [r.name for r in report.results if not r.passed]
 
@@ -137,6 +143,8 @@ def main():
             "blur": res_dict.get("blur").value if "blur" in res_dict else "",
             "brightness": res_dict.get("brightness").value if "brightness" in res_dict else "",
             "clutter": res_dict.get("clutter").value if "clutter" in res_dict else "",
+            "framing": res_dict.get("framing").value if "framing" in res_dict else "",
+            "used_fallback": used_fb,
             "tips": tips_str,
         }
         eval_records.append(record)
@@ -156,9 +164,10 @@ def main():
     print(f"=================================================================")
     if rejected_goods:
         for idx, r in enumerate(rejected_goods, start=1):
+            fb_str = " [fallback]" if r["used_fallback"] else ""
             print(
-                f"{idx}. {r['filename']} [split={r['split']}, source={r['source']}]: failed [{r['failing_checks']}] "
-                f"(res={r['resolution']}, blur={r['blur']}, bright={r['brightness']}, clutter={r['clutter']})"
+                f"{idx}. {r['filename']} [split={r['split']}, source={r['source']}]{fb_str}: failed [{r['failing_checks']}] "
+                f"(res={r['resolution']}, blur={r['blur']}, bright={r['brightness']}, clutter={r['clutter']}, framing={r['framing']})"
             )
             if r["tips"]:
                 print(f"   Tips: {r['tips']}")
@@ -179,6 +188,8 @@ def main():
         "blur",
         "brightness",
         "clutter",
+        "framing",
+        "used_fallback",
         "tips",
     ]
     with open(calib_csv_path, mode="w", newline="", encoding="utf-8") as f:

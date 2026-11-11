@@ -61,8 +61,8 @@ def assess_photo(
         # Core image quality checks
         results.append(check_resolution(img, config))
         results.append(check_blur(img, config))
-        results.append(check_brightness(img, config))
-        results.append(check_clutter(img, config))
+        results.append(check_brightness(img, mask=mask, config=config))
+        results.append(check_clutter(img, mask=mask, config=config))
 
         # Framing check only if mask is provided
         if mask is not None:

@@ -196,3 +196,89 @@ def test_assess_photo_invalid_inputs():
 
     rep_empty = assess_photo(np.array([]))
     assert rep_empty.ok is False
+
+
+def test_mask_based_exposure_dark_on_white():
+    """A dark object on a white background passes exposure when mask is provided."""
+    img = np.full((800, 800, 3), 255, dtype=np.uint8)
+    mask = np.zeros((800, 800), dtype=np.uint8)
+    mask[200:600, 200:600] = 255
+    img[200:600, 200:600] = 80
+
+    cfg = CoachConfig(
+        dark_feature="product_p95",
+        dark_threshold=50.0,
+        bright_feature="product_clip_hi",
+        bright_threshold=0.20,
+    )
+    res = check_brightness(img, mask=mask, config=cfg)
+    assert res.passed is True
+    assert res.tip == ""
+    assert res.used_fallback is False
+
+
+def test_mask_based_exposure_washed_out_fails():
+    """A washed-out object with product pixels at 255 fails bright check."""
+    img = np.full((800, 800, 3), 120, dtype=np.uint8)
+    mask = np.zeros((800, 800), dtype=np.uint8)
+    mask[200:600, 200:600] = 255
+    img[200:600, 200:600] = 255  # 100% clipped product
+
+    cfg = CoachConfig(
+        dark_feature="product_p95",
+        dark_threshold=50.0,
+        bright_feature="product_clip_hi",
+        bright_threshold=0.20,
+    )
+    res = check_brightness(img, mask=mask, config=cfg)
+    assert res.passed is False
+    assert "bright" in res.tip.lower()
+
+
+def test_mask_based_clutter_plain_vs_busy():
+    """Plain background passes clutter, while background with dense edges fails."""
+    mask = np.zeros((800, 800), dtype=np.uint8)
+    mask[200:600, 200:600] = 255
+    cfg = CoachConfig(clutter_feature="bg_edge_density", clutter_threshold=0.08)
+
+    # Plain background
+    img_plain = np.full((800, 800, 3), 200, dtype=np.uint8)
+    res_plain = check_clutter(img_plain, mask=mask, config=cfg)
+    assert res_plain.passed is True
+    assert res_plain.used_fallback is False
+
+    # Busy background
+    img_busy = np.full((800, 800, 3), 200, dtype=np.uint8)
+    for y in range(0, 160, 8):
+        img_busy[y, :] = 0
+    for x in range(0, 160, 8):
+        img_busy[:, x] = 0
+
+    res_busy = check_clutter(img_busy, mask=mask, config=cfg)
+    assert res_busy.passed is False
+    assert "messy" in res_busy.tip.lower()
+
+
+def test_mask_fallback_when_mask_none_or_small():
+    """Product-based features fall back to whole-image version when mask is None or < 2%."""
+    img = np.full((800, 800, 3), 150, dtype=np.uint8)
+    cfg = CoachConfig(
+        dark_feature="product_p95",
+        bright_feature="product_clip_hi",
+        clutter_feature="bg_edge_density",
+    )
+
+    # Case 1: mask is None
+    res_b_none = check_brightness(img, mask=None, config=cfg)
+    assert res_b_none.used_fallback is True
+    res_c_none = check_clutter(img, mask=None, config=cfg)
+    assert res_c_none.used_fallback is True
+
+    # Case 2: mask has product area < 2% (e.g. 50x50 in 800x800 = 0.39%)
+    mask_small = np.zeros((800, 800), dtype=np.uint8)
+    mask_small[375:425, 375:425] = 255
+    res_b_small = check_brightness(img, mask=mask_small, config=cfg)
+    assert res_b_small.used_fallback is True
+    res_c_small = check_clutter(img, mask=mask_small, config=cfg)
+    assert res_c_small.used_fallback is True
+
