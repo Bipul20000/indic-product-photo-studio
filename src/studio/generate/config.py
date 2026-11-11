@@ -85,7 +85,7 @@ class GenConfig:
     controlnet_id: str = "lllyasviel/control_v11p_sd15_inpaint"
     steps: int = 20
     guidance: float = 7.0
-    controlnet_scale: float = 1.0
+    controlnet_scale: float = 0.5
     eta: float = 1.0
     lora_path: Optional[str] = None
     lora_scale: float = 0.8

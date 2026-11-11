@@ -28,6 +28,8 @@ def parse_args():
     parser.add_argument("--originals", type=str, default="data/coach_eval/originals/good", help="Directory of original photos.")
     parser.add_argument("--lora", type=str, default=None, help="Optional path to LoRA weights.")
     parser.add_argument("--lora-scale", type=float, default=0.8, help="LoRA cross-attention scale.")
+    parser.add_argument("--fill", type=float, default=None, help="Product canvas fill fraction override.")
+    parser.add_argument("--controlnet-scale", type=float, default=None, help="ControlNet conditioning scale override.")
     parser.add_argument("--fake-generator", action="store_true", help="Use FakeBackgroundGenerator for CPU dry runs.")
     return parser.parse_args()
 
@@ -200,6 +202,8 @@ def main():
         lora_path=args.lora,
         lora_scale=args.lora_scale,
     )
+    if args.controlnet_scale is not None:
+        gen_config.controlnet_scale = args.controlnet_scale
 
     if args.fake_generator:
         generator = FakeBackgroundGenerator(config=gen_config)
@@ -292,7 +296,18 @@ def main():
     manifest_file = open(manifest_path, "a", newline="", encoding="utf-8")
     manifest_writer = csv.DictWriter(
         manifest_file,
-        fieldnames=["product", "scene", "seed", "prompt", "seconds", "peak_vram_mb", "attempts", "person_flag"],
+        fieldnames=[
+            "product",
+            "scene",
+            "seed",
+            "prompt",
+            "seconds",
+            "peak_vram_mb",
+            "attempts",
+            "person_flag",
+            "controlnet_scale",
+            "fill",
+        ],
     )
     if not manifest_exists:
         manifest_writer.writeheader()
@@ -309,7 +324,8 @@ def main():
         # A. Save white-background version
         white_path = white_dir / f"{stem}.jpg"
         if not white_path.exists():
-            canvas_rgba, canvas_mask = place_product(seg.rgba, preset=args.preset)
+            fill_white = args.fill if args.fill is not None else 0.80
+            canvas_rgba, canvas_mask = place_product(seg.rgba, preset=args.preset, fill=fill_white)
             bg_white = np.full((canvas_h, canvas_w, 3), 255, dtype=np.uint8)
             white_bgr = composite(bg_white, canvas_rgba, canvas_mask, shadow=True, opacity=0.30)
             cv2.imwrite(str(white_path), white_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])
@@ -331,6 +347,8 @@ def main():
                     seed=seed,
                     generator=generator,
                     gen_config=gen_config,
+                    fill=args.fill,
+                    controlnet_scale=args.controlnet_scale,
                 )
                 elapsed = time.time() - t0
 
@@ -348,6 +366,8 @@ def main():
                     "peak_vram_mb": round(generator.peak_vram_mb, 2),
                     "attempts": res.attempts,
                     "person_flag": res.person_flag,
+                    "controlnet_scale": res.controlnet_scale,
+                    "fill": res.fill,
                 }
                 manifest_writer.writerow(manifest_row)
                 manifest_file.flush()

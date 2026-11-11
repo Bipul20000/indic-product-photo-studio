@@ -21,3 +21,8 @@ An AI-powered product photography tool designed for Indic marketplace sellers to
    python scripts/check_env.py
    pytest
    ```
+
+## Generation defaults
+
+A default `controlnet_scale=0.5` and `fill=0.65` (for generative scenes) were chosen from a visual 6-config sweep on 4 products × 2 scenes. The sweep showed that `fill=0.8` produced ghost shells around round products, whereas `fill=0.65` and `controlnet_scale=0.5` cleanly preserve product silhouettes without edge artifacts.
+

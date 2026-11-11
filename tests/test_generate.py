@@ -296,3 +296,47 @@ def test_sweep_config_grid_has_six_entries():
     assert len(SWEEP_CONFIGS) == 6
 
 
+def test_generation_defaults():
+    """Verify GenConfig and run_pipeline default parameters (fill and controlnet_scale)."""
+    # 1. GenConfig default
+    assert GenConfig().controlnet_scale == 0.5
+
+    # 1000x1000 test image with product
+    fake_img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+    fake_img[300:700, 300:700] = 255
+    generator = FakeBackgroundGenerator()
+
+    # 2. run_pipeline default for white: fill=0.80, controlnet_scale=0.5
+    res_white = run_pipeline(
+        image_path=fake_img,
+        scene="white",
+        force=True,
+        generator=generator,
+    )
+    assert res_white.fill == 0.80
+    assert res_white.controlnet_scale == 0.5
+
+    # 3. run_pipeline default for non-white scenes: fill=0.65, controlnet_scale=0.5
+    res_scene = run_pipeline(
+        image_path=fake_img,
+        scene="diwali",
+        force=True,
+        generator=generator,
+    )
+    assert res_scene.fill == 0.65
+    assert res_scene.controlnet_scale == 0.5
+
+    # 4. Explicit parameter overrides
+    res_override = run_pipeline(
+        image_path=fake_img,
+        scene="diwali",
+        fill=0.75,
+        controlnet_scale=0.9,
+        force=True,
+        generator=generator,
+    )
+    assert res_override.fill == 0.75
+    assert res_override.controlnet_scale == 0.9
+
+
+

@@ -32,6 +32,8 @@ class PipelineResult:
     background: Optional[np.ndarray] = None
     attempts: int = 1
     person_flag: bool = False
+    fill: float = 0.80
+    controlnet_scale: float = 0.5
 
 
 def run_pipeline(
@@ -44,7 +46,7 @@ def run_pipeline(
     product_name: Optional[str] = None,
     generator: Optional[Any] = None,
     gen_config: Optional[GenConfig] = None,
-    fill: float = 0.80,
+    fill: Optional[float] = None,
     controlnet_scale: Optional[float] = None,
 ) -> PipelineResult:
     """Run the photo studio generation pipeline for white background or AI scenes.
@@ -59,14 +61,28 @@ def run_pipeline(
         product_name: Name of product to substitute into prompt (default "the product").
         generator: Optional BackgroundGenerator or FakeBackgroundGenerator instance.
         gen_config: Optional GenConfig for generation settings.
-        fill: Fraction of shorter canvas side that product occupies (default 0.80).
-        controlnet_scale: Optional override for ControlNet conditioning scale.
+        fill: Fraction of shorter canvas side that product occupies.
+            Defaults to 0.80 for 'white' and 0.65 for all other scenes.
+        controlnet_scale: Optional override for ControlNet conditioning scale (default 0.5).
 
     Returns:
         PipelineResult containing ok status, coach report, output image, segment result, seconds,
-        scene, seed, prompt, background array, attempts, and person_flag.
+        scene, seed, prompt, background array, attempts, person_flag, fill, and controlnet_scale.
     """
     start_time = time.time()
+
+    # Resolve default fill: 0.80 for white background, 0.65 for generative scenes
+    effective_fill = (0.80 if scene == "white" else 0.65) if fill is None else fill
+
+    # Resolve effective ControlNet scale
+    if controlnet_scale is not None:
+        effective_cn = controlnet_scale
+    elif hasattr(generator, "config") and hasattr(generator.config, "controlnet_scale"):
+        effective_cn = generator.config.controlnet_scale
+    elif gen_config is not None:
+        effective_cn = gen_config.controlnet_scale
+    else:
+        effective_cn = 0.5
 
     if isinstance(image_path, (str, Path)):
         img_bgr = load_image(image_path)
@@ -89,6 +105,8 @@ def run_pipeline(
             background=None,
             attempts=1,
             person_flag=False,
+            fill=effective_fill,
+            controlnet_scale=effective_cn,
         )
 
     canvas_w, canvas_h = _resolve_preset(marketplace)
@@ -109,10 +127,12 @@ def run_pipeline(
             background=blank,
             attempts=1,
             person_flag=False,
+            fill=effective_fill,
+            controlnet_scale=effective_cn,
         )
 
     # Place product on preset canvas with configured fill
-    canvas_rgba, canvas_mask = place_product(seg.rgba, preset=marketplace, fill=fill)
+    canvas_rgba, canvas_mask = place_product(seg.rgba, preset=marketplace, fill=effective_fill)
 
     if scene == "white":
         bg = np.full((canvas_h, canvas_w, 3), 255, dtype=np.uint8)
@@ -130,6 +150,8 @@ def run_pipeline(
             background=bg,
             attempts=1,
             person_flag=False,
+            fill=effective_fill,
+            controlnet_scale=effective_cn,
         )
 
     # AI Scene Background Generation
@@ -172,9 +194,8 @@ def run_pipeline(
             "prompt": prompt,
             "negative": negative,
             "seed": current_seed,
+            "controlnet_scale": effective_cn,
         }
-        if controlnet_scale is not None:
-            gen_kwargs["controlnet_scale"] = controlnet_scale
 
         gen_pil = generator.generate(**gen_kwargs)
 
@@ -222,4 +243,6 @@ def run_pipeline(
         background=bg_upscaled,
         attempts=attempts,
         person_flag=person_flag,
+        fill=effective_fill,
+        controlnet_scale=effective_cn,
     )
