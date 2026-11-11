@@ -1,6 +1,9 @@
 diwali:
   trigger: "indiandiwali"
   description: "festive Diwali decoration with diyas, marigold flowers and warm lights"
+  categories:
+    - "Diwali"
+    - "Diyas"
   terms:
     - term: "Diwali decoration"
       caption: "Diwali decoration"
@@ -23,6 +26,9 @@ diwali:
 raksha_bandhan:
   trigger: "indianrakhi"
   description: "Raksha Bandhan festive setting with rakhis, a thali and flowers"
+  categories:
+    - "Rakhi"
+    - "Raksha Bandhan"
   terms:
     - term: "rakhi"
       caption: "rakhis"
@@ -45,6 +51,8 @@ raksha_bandhan:
 holi:
   trigger: "indianholi"
   description: "Holi festive celebration with vibrant dry gulal powders and festive colors"
+  categories:
+    - "Holi"
   terms:
     - term: "gulal"
       caption: "heaps of vibrant dry gulal powders"
@@ -67,6 +75,8 @@ holi:
 wedding:
   trigger: "indianwedding"
   description: "traditional Indian wedding mandap decoration with flowers and fabric drapes"
+  categories:
+    - "Weddings in India"
   terms:
     - term: "wedding mandap"
       caption: "a decorated wedding mandap"
@@ -89,6 +99,8 @@ wedding:
 indian_home:
   trigger: "indianhome"
   description: "warm traditional Indian home interior with brass decor and warm ambient light"
+  categories:
+    - "Interior of houses in India"
   terms:
     - term: "brass urli"
       caption: "a brass urli with floating flowers and candles"

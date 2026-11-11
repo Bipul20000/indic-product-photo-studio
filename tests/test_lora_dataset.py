@@ -173,3 +173,115 @@ def test_dark_or_low_res_check():
     # Normal bright image (>= 600 px and >= 40 luminance)
     good_img = np.full((700, 700, 3), 128, dtype=np.uint8)
     assert check_dark_or_low_res(good_img) is False
+
+
+def test_category_exists_check_mocked():
+    """Verify check_category_exists_and_has_files logic."""
+    from scripts.build_lora_dataset import check_category_exists_and_has_files
+
+    # 1. Existing category with files
+    session_with_files = MagicMock()
+    resp_with_files = MagicMock()
+    resp_with_files.status_code = 200
+    resp_with_files.json.return_value = {
+        "query": {"pages": {"101": {"pageid": 101, "title": "Category:Diwali", "categoryinfo": {"files": 25}}}}
+    }
+    session_with_files.get.return_value = resp_with_files
+    assert check_category_exists_and_has_files(session_with_files, "Diwali") is True
+
+    # 2. Existing category with 0 files
+    session_empty = MagicMock()
+    resp_empty = MagicMock()
+    resp_empty.status_code = 200
+    resp_empty.json.return_value = {
+        "query": {"pages": {"102": {"pageid": 102, "title": "Category:EmptyCat", "categoryinfo": {"files": 0}}}}
+    }
+    session_empty.get.return_value = resp_empty
+    assert check_category_exists_and_has_files(session_empty, "EmptyCat") is False
+
+    # 3. Missing category
+    session_missing = MagicMock()
+    resp_missing = MagicMock()
+    resp_missing.status_code = 200
+    resp_missing.json.return_value = {
+        "query": {"pages": {"-1": {"title": "Category:MissingCat", "missing": ""}}}
+    }
+    session_missing.get.return_value = resp_missing
+    assert check_category_exists_and_has_files(session_missing, "MissingCat") is False
+
+
+def test_fetch_category_batch_mocked():
+    """Verify fetch_category_batch queries categorymembers with gcmtype=file, gcmlimit=100."""
+    from scripts.build_lora_dataset import fetch_category_batch
+
+    session = MagicMock()
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "query": {
+            "pages": {
+                "10": {
+                    "index": 1,
+                    "title": "File:TestDiya.jpg",
+                    "imageinfo": [{
+                        "mime": "image/jpeg",
+                        "width": 1280,
+                        "height": 720,
+                        "thumburl": "https://thumb.wikimedia.org/testdiya.jpg",
+                        "descriptionurl": "https://commons.wikimedia.org/wiki/File:TestDiya.jpg",
+                        "extmetadata": {
+                            "Artist": {"value": "Photographer"},
+                            "LicenseShortName": {"value": "CC BY-SA 4.0"},
+                        },
+                    }],
+                },
+                "11": {
+                    "index": 2,
+                    "title": "File:TestDiya.svg",
+                    "imageinfo": [{
+                        "mime": "image/svg+xml",
+                        "width": 1280,
+                        "height": 720,
+                    }],
+                },
+            }
+        },
+        "continue": {"gcmcontinue": "file|1234|5678", "continue": "gcmcontinue||"},
+    }
+    session.get.return_value = resp
+
+    candidates, continue_token = fetch_category_batch(session, "Diwali")
+
+    # Only jpeg candidate kept (svg filtered out)
+    assert len(candidates) == 1
+    assert candidates[0]["title"] == "File:TestDiya.jpg"
+    assert candidates[0]["download_url"] == "https://thumb.wikimedia.org/testdiya.jpg"
+    assert candidates[0]["author"] == "Photographer"
+    assert candidates[0]["license"] == "CC BY-SA 4.0"
+    assert continue_token == {"gcmcontinue": "file|1234|5678", "continue": "gcmcontinue||"}
+
+    # Verify query params passed to session.get
+    _, kwargs = session.get.call_args
+    params = kwargs.get("params", {})
+    assert params.get("generator") == "categorymembers"
+    assert params.get("gcmtitle") == "Category:Diwali"
+    assert params.get("gcmtype") == "file"
+    assert params.get("gcmlimit") == 100
+
+
+def test_lora_themes_yaml_has_categories():
+    """Verify that all themes in configs/lora_themes.yaml contain expected categories."""
+    import yaml
+
+    config_path = Path("configs/lora_themes.yaml")
+    assert config_path.exists()
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        themes = yaml.safe_load(f)
+
+    assert themes["diwali"]["categories"] == ["Diwali", "Diyas"]
+    assert themes["raksha_bandhan"]["categories"] == ["Rakhi", "Raksha Bandhan"]
+    assert themes["holi"]["categories"] == ["Holi"]
+    assert themes["wedding"]["categories"] == ["Weddings in India"]
+    assert themes["indian_home"]["categories"] == ["Interior of houses in India"]
+

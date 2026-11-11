@@ -25,13 +25,13 @@ from PIL import Image
 import requests
 import yaml
 
-from studio.vision.people import (
-    get_person_detector,
-    check_person_yolo,
-    check_person_hog,
-    detect_person,
-    contains_person,
-)
+from studio.vision.people import contains_person
+
+
+def check_person_yolo(img_bgr: np.ndarray, model: Any = None) -> bool:
+    """Helper for mocked person detector verification with Phase 4 filtering thresholds."""
+    return contains_person(img_bgr, conf=0.35, min_box_area=0.015, ignore_mask=None, model=model)
+
 
 
 def check_dark_or_low_res(
@@ -258,6 +258,13 @@ def fetch_candidate_batch(
         return [], None
 
     pages = data.get("query", {}).get("pages", {})
+    candidates = _parse_pages_to_candidates(pages)
+    next_continue = data.get("continue")
+    return candidates, next_continue
+
+
+def _parse_pages_to_candidates(pages: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract candidate image metadata from MediaWiki pages dict."""
     sorted_pages = sorted(pages.values(), key=lambda p: p.get("index", 999999))
 
     candidates = []
@@ -288,8 +295,77 @@ def fetch_candidate_batch(
             "license": clean_license(raw_license),
         })
 
+    return candidates
+
+
+def check_category_exists_and_has_files(session: requests.Session, category: str) -> bool:
+    """Check that a Wikimedia Commons category exists and has files."""
+    cat_title = category if category.startswith("Category:") else f"Category:{category}"
+    api_url = "https://commons.wikimedia.org/w/api.php"
+    params = {
+        "action": "query",
+        "titles": cat_title,
+        "prop": "categoryinfo",
+        "format": "json",
+    }
+    resp = request_with_backoff(session, api_url, params=params)
+    if resp is None:
+        return False
+    try:
+        data = resp.json()
+        pages = data.get("query", {}).get("pages", {})
+        for _, pinfo in pages.items():
+            cinfo = pinfo.get("categoryinfo", {})
+            if cinfo.get("files", 0) > 0:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def fetch_category_batch(
+    session: requests.Session,
+    category_name: str,
+    continue_params: dict[str, Any] | None = None,
+    max_retries: int = 5,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Fetch one batch of up to 100 files from a category in Wikimedia Commons."""
+    cat_title = category_name if category_name.startswith("Category:") else f"Category:{category_name}"
+    api_url = "https://commons.wikimedia.org/w/api.php"
+    params = {
+        "action": "query",
+        "generator": "categorymembers",
+        "gcmtitle": cat_title,
+        "gcmtype": "file",
+        "gcmlimit": 100,
+        "prop": "imageinfo",
+        "iiprop": "url|size|mime|extmetadata",
+        "iiurlwidth": 1280,
+        "format": "json",
+    }
+    if continue_params:
+        params.update(continue_params)
+
+    data = None
+    for attempt in range(max_retries):
+        resp = request_with_backoff(session, api_url, params=params)
+        if resp is None:
+            time.sleep(2.0 * (2 ** attempt))
+            continue
+        try:
+            data = resp.json()
+            break
+        except Exception:
+            time.sleep(2.0 * (2 ** attempt))
+
+    if data is None:
+        return [], None
+
+    pages = data.get("query", {}).get("pages", {})
+    candidates = _parse_pages_to_candidates(pages)
     next_continue = data.get("continue")
     return candidates, next_continue
+
 
 
 def to_thumb_url(url: str, width: int = 1280) -> str:
@@ -381,9 +457,6 @@ def main():
     session = requests.Session()
     session.headers.update({"User-Agent": "indic-product-photo-studio course project, student use"})
 
-    # Ensure detector is ready
-    get_person_detector()
-
     base_data_path = Path(args.data_dir)
     base_data_path.mkdir(parents=True, exist_ok=True)
 
@@ -397,6 +470,7 @@ def main():
         description = theme_info["description"]
         main_terms = theme_info.get("terms", [])
         fallback_terms = theme_info.get("fallback_terms", [])
+        categories = theme_info.get("categories", [])
 
         theme_dir = base_data_path / theme
         theme_dir.mkdir(parents=True, exist_ok=True)
@@ -414,8 +488,74 @@ def main():
 
         print(f"\nProcessing theme: {theme} (trigger: '{trigger}')")
 
-        def evaluate_term(term_dict: dict[str, str], is_fallback: bool = False):
+        def process_candidate_item(cand: dict[str, Any], query_str: str, caption_phrase: str) -> bool:
             nonlocal theme_accepted_count
+            if theme_accepted_count >= args.target_per_theme:
+                return False
+
+            theme_stats["candidates_found"] += 1
+
+            # Download candidate image
+            img = download_candidate_image(session, cand["download_url"])
+            if img is None:
+                return False
+
+            # FILTER 1: Person detection (conf=0.35, min_box_area=0.015, no ignore_mask)
+            if contains_person(img, conf=0.35, min_box_area=0.015, ignore_mask=None):
+                theme_stats["dropped_person"] += 1
+                return False
+
+            # FILTER 2: Dark or low-res (luminance < 40 or short side < 600)
+            if check_dark_or_low_res(img, min_luminance=40.0, min_short_side=600):
+                theme_stats["dropped_dark_small"] += 1
+                return False
+
+            # FILTER 3: Near-duplicates (phash dist <= 6 to ANY accepted across all themes)
+            phash = compute_phash(img)
+            if is_duplicate(phash, all_accepted_hashes, max_distance=6):
+                theme_stats["dropped_duplicate"] += 1
+                return False
+
+            # FILTER 4: Author diversity (max 6 images per author per theme)
+            author = cand["author"]
+            if theme_author_counts[author] >= 6:
+                theme_stats["dropped_author_cap"] += 1
+                return False
+
+            # Image accepted!
+            theme_author_counts[author] += 1
+            all_accepted_hashes.append(phash)
+            theme_accepted_count += 1
+            theme_stats["final_count"] = theme_accepted_count
+            print(f"    [{theme}] Accepted {theme_accepted_count}/{args.target_per_theme}: {cand['title']}", flush=True)
+
+            # Process: resize shorter side to 512, center crop 512x512
+            crop = process_and_crop(img, target_size=512)
+            img_filename = f"{theme_accepted_count:03d}.jpg"
+            txt_filename = f"{theme_accepted_count:03d}.txt"
+
+            out_img_path = theme_dir / img_filename
+            out_txt_path = theme_dir / txt_filename
+
+            cv2.imwrite(str(out_img_path), crop, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+
+            caption_text = build_caption(trigger, caption_phrase, description)
+            out_txt_path.write_text(caption_text, encoding="utf-8")
+
+            all_metadata_records.append({
+                "filename": img_filename,
+                "theme": theme,
+                "term": query_str,
+                "caption": caption_text,
+                "source_url": cand["source_url"],
+                "page_url": cand["page_url"],
+                "author": author,
+                "license": cand["license"],
+                "phash": str(phash),
+            })
+            return True
+
+        def evaluate_term(term_dict: dict[str, str], is_fallback: bool = False):
             search_query = term_dict["term"]
             caption_phrase = term_dict["caption"]
             tag = "[fallback]" if is_fallback else "[main]"
@@ -433,69 +573,34 @@ def main():
                     break
 
                 for cand in candidates:
+                    process_candidate_item(cand, query_str=search_query, caption_phrase=caption_phrase)
                     if theme_accepted_count >= args.target_per_theme:
                         break
 
-                    theme_stats["candidates_found"] += 1
+                if not continue_token:
+                    break
 
-                    # Download candidate image
-                    img = download_candidate_image(session, cand["download_url"])
-                    if img is None:
-                        continue
+        def evaluate_category(cat: str):
+            print(f"  [category] Category: '{cat}'")
+            if not check_category_exists_and_has_files(session, cat):
+                print(f"WARNING: Category '{cat}' does not exist or has no files. Skipping.")
+                return
 
-                    # FILTER 1: Person detection
-                    if detect_person(img):
-                        theme_stats["dropped_person"] += 1
-                        continue
+            continue_token = None
+            pages_to_fetch = 5
 
-                    # FILTER 2: Dark or low-res (luminance < 40 or short side < 600)
-                    if check_dark_or_low_res(img, min_luminance=40.0, min_short_side=600):
-                        theme_stats["dropped_dark_small"] += 1
-                        continue
+            for _ in range(pages_to_fetch):
+                if theme_accepted_count >= args.target_per_theme:
+                    break
 
-                    # FILTER 3: Near-duplicates (phash dist <= 6 to ANY accepted across all themes)
-                    phash = compute_phash(img)
-                    if is_duplicate(phash, all_accepted_hashes, max_distance=6):
-                        theme_stats["dropped_duplicate"] += 1
-                        continue
+                candidates, continue_token = fetch_category_batch(session, cat, continue_token)
+                if not candidates:
+                    break
 
-                    # FILTER 4: Author diversity (max 6 images per author per theme)
-                    author = cand["author"]
-                    if theme_author_counts[author] >= 6:
-                        theme_stats["dropped_author_cap"] += 1
-                        continue
-
-                    # Image accepted!
-                    theme_author_counts[author] += 1
-                    all_accepted_hashes.append(phash)
-                    theme_accepted_count += 1
-                    theme_stats["final_count"] = theme_accepted_count
-                    print(f"    [{theme}] Accepted {theme_accepted_count}/{args.target_per_theme}: {cand['title']}", flush=True)
-
-                    # Process: resize shorter side to 512, center crop 512x512
-                    crop = process_and_crop(img, target_size=512)
-                    img_filename = f"{theme_accepted_count:03d}.jpg"
-                    txt_filename = f"{theme_accepted_count:03d}.txt"
-
-                    out_img_path = theme_dir / img_filename
-                    out_txt_path = theme_dir / txt_filename
-
-                    cv2.imwrite(str(out_img_path), crop, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-
-                    caption_text = build_caption(trigger, caption_phrase, description)
-                    out_txt_path.write_text(caption_text, encoding="utf-8")
-
-                    all_metadata_records.append({
-                        "filename": img_filename,
-                        "theme": theme,
-                        "term": search_query,
-                        "caption": caption_text,
-                        "source_url": cand["source_url"],
-                        "page_url": cand["page_url"],
-                        "author": author,
-                        "license": cand["license"],
-                        "phash": str(phash),
-                    })
+                for cand in candidates:
+                    process_candidate_item(cand, query_str=f"Category:{cat}", caption_phrase=cat)
+                    if theme_accepted_count >= args.target_per_theme:
+                        break
 
                 if not continue_token:
                     break
@@ -506,6 +611,12 @@ def main():
                 break
             evaluate_term(term_dict, is_fallback=False)
 
+        # Run categories (in addition to search terms)
+        for cat in categories:
+            if theme_accepted_count >= args.target_per_theme:
+                break
+            evaluate_category(cat)
+
         # If theme < 50 and hasn't reached target, run fallback terms
         if theme_accepted_count < 50 and theme_accepted_count < args.target_per_theme:
             print(f"  Theme '{theme}' has {theme_accepted_count} (< 50) images. Running fallback terms...")
@@ -513,6 +624,7 @@ def main():
                 if theme_accepted_count >= args.target_per_theme:
                     break
                 evaluate_term(fb_dict, is_fallback=True)
+
 
         stats[theme] = theme_stats
         print(f"  Theme '{theme}' finished with {theme_accepted_count} accepted images.")
