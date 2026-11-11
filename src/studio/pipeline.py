@@ -14,6 +14,7 @@ from studio.generate.backgrounds import BackgroundGenerator, FakeBackgroundGener
 from studio.generate.config import GenConfig, load_scenes
 from studio.generate.prep import build_inpaint_inputs, gen_size
 from studio.segment.segmenter import SegmentResult
+from studio.vision.people import contains_person
 
 
 @dataclass
@@ -29,6 +30,8 @@ class PipelineResult:
     seed: int = 0
     prompt: str = ""
     background: Optional[np.ndarray] = None
+    attempts: int = 1
+    person_flag: bool = False
 
 
 def run_pipeline(
@@ -41,6 +44,8 @@ def run_pipeline(
     product_name: Optional[str] = None,
     generator: Optional[Any] = None,
     gen_config: Optional[GenConfig] = None,
+    fill: float = 0.80,
+    controlnet_scale: Optional[float] = None,
 ) -> PipelineResult:
     """Run the photo studio generation pipeline for white background or AI scenes.
 
@@ -54,10 +59,12 @@ def run_pipeline(
         product_name: Name of product to substitute into prompt (default "the product").
         generator: Optional BackgroundGenerator or FakeBackgroundGenerator instance.
         gen_config: Optional GenConfig for generation settings.
+        fill: Fraction of shorter canvas side that product occupies (default 0.80).
+        controlnet_scale: Optional override for ControlNet conditioning scale.
 
     Returns:
         PipelineResult containing ok status, coach report, output image, segment result, seconds,
-        scene, seed, prompt, and background array.
+        scene, seed, prompt, background array, attempts, and person_flag.
     """
     start_time = time.time()
 
@@ -80,6 +87,8 @@ def run_pipeline(
             seed=seed,
             prompt="",
             background=None,
+            attempts=1,
+            person_flag=False,
         )
 
     canvas_w, canvas_h = _resolve_preset(marketplace)
@@ -98,10 +107,12 @@ def run_pipeline(
             seed=seed,
             prompt="",
             background=blank,
+            attempts=1,
+            person_flag=False,
         )
 
-    # Place product on preset canvas
-    canvas_rgba, canvas_mask = place_product(seg.rgba, preset=marketplace)
+    # Place product on preset canvas with configured fill
+    canvas_rgba, canvas_mask = place_product(seg.rgba, preset=marketplace, fill=fill)
 
     if scene == "white":
         bg = np.full((canvas_h, canvas_w, 3), 255, dtype=np.uint8)
@@ -117,6 +128,8 @@ def run_pipeline(
             seed=seed,
             prompt="",
             background=bg,
+            attempts=1,
+            person_flag=False,
         )
 
     # AI Scene Background Generation
@@ -146,14 +159,40 @@ def run_pipeline(
     if generator is None:
         generator = BackgroundGenerator(config=g_cfg)
 
-    # Generate background at generation size
-    gen_pil = generator.generate(
-        init_image=init_image,
-        inpaint_mask=inpaint_mask,
-        prompt=prompt,
-        negative=negative,
-        seed=seed,
-    )
+    # Generate background with retry loop on people (up to 3 retries, 1-4 attempts)
+    attempts = 1
+    person_flag = False
+    current_seed = seed
+    gen_pil = None
+
+    while True:
+        gen_kwargs = {
+            "init_image": init_image,
+            "inpaint_mask": inpaint_mask,
+            "prompt": prompt,
+            "negative": negative,
+            "seed": current_seed,
+        }
+        if controlnet_scale is not None:
+            gen_kwargs["controlnet_scale"] = controlnet_scale
+
+        gen_pil = generator.generate(**gen_kwargs)
+
+        # Check for people in generated background, ignoring product mask
+        has_person = contains_person(
+            gen_pil,
+            conf=0.35,
+            min_box_area=0.01,
+            ignore_mask=small_prod_mask,
+        )
+
+        if has_person and attempts <= 3:
+            current_seed = seed + 1000 * attempts
+            attempts += 1
+            continue
+
+        person_flag = bool(has_person)
+        break
 
     # Convert PIL RGB to OpenCV BGR
     gen_bgr_small = cv2.cvtColor(np.array(gen_pil), cv2.COLOR_RGB2BGR)
@@ -178,7 +217,9 @@ def run_pipeline(
         segment=seg,
         seconds=round(elapsed, 3),
         scene=scene,
-        seed=seed,
+        seed=current_seed,
         prompt=prompt,
         background=bg_upscaled,
+        attempts=attempts,
+        person_flag=person_flag,
     )

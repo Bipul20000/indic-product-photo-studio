@@ -292,7 +292,7 @@ def main():
     manifest_file = open(manifest_path, "a", newline="", encoding="utf-8")
     manifest_writer = csv.DictWriter(
         manifest_file,
-        fieldnames=["product", "scene", "seed", "prompt", "seconds", "peak_vram_mb"],
+        fieldnames=["product", "scene", "seed", "prompt", "seconds", "peak_vram_mb", "attempts", "person_flag"],
     )
     if not manifest_exists:
         manifest_writer.writeheader()
@@ -346,6 +346,8 @@ def main():
                     "prompt": res.prompt,
                     "seconds": round(elapsed, 3),
                     "peak_vram_mb": round(generator.peak_vram_mb, 2),
+                    "attempts": res.attempts,
+                    "person_flag": res.person_flag,
                 }
                 manifest_writer.writerow(manifest_row)
                 manifest_file.flush()

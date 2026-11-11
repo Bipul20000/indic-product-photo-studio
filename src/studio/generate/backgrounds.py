@@ -31,6 +31,7 @@ class FakeBackgroundGenerator:
         prompt: str,
         negative: str,
         seed: int = 0,
+        controlnet_scale: Optional[float] = None,
     ) -> Image.Image:
         """Generate a deterministic smooth gradient background image matching scene and seed."""
         w, h = init_image.size
@@ -171,6 +172,7 @@ class BackgroundGenerator:
         prompt: str,
         negative: str,
         seed: int = 0,
+        controlnet_scale: Optional[float] = None,
     ) -> Image.Image:
         """Run ControlNet inpainting pipeline to generate background.
 
@@ -193,6 +195,8 @@ class BackgroundGenerator:
 
         generator = torch.Generator(device="cuda").manual_seed(seed)
 
+        cn_scale = self.config.controlnet_scale if controlnet_scale is None else float(controlnet_scale)
+
         call_kwargs = {
             "prompt": prompt,
             "negative_prompt": negative,
@@ -202,7 +206,7 @@ class BackgroundGenerator:
             "num_inference_steps": self.config.steps,
             "guidance_scale": self.config.guidance,
             "eta": self.config.eta,
-            "controlnet_conditioning_scale": self.config.controlnet_scale,
+            "controlnet_conditioning_scale": cn_scale,
             "generator": generator,
         }
 

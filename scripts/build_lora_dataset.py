@@ -25,100 +25,13 @@ from PIL import Image
 import requests
 import yaml
 
-os.environ.setdefault("YOLO_CONFIG_DIR", "/tmp/ultralytics")
-
-# Lazy model references
-_YOLO_MODEL = None
-_YOLO_TRIED = False
-_USE_HOG = False
-_HOG_WARNING_PRINTED = False
-
-
-def get_person_detector():
-    """Lazily load YOLOv8n or fallback to OpenCV HOG."""
-    global _YOLO_MODEL, _YOLO_TRIED, _USE_HOG, _HOG_WARNING_PRINTED
-    if not _YOLO_TRIED:
-        _YOLO_TRIED = True
-        try:
-            from ultralytics import YOLO
-            _YOLO_MODEL = YOLO("yolov8n.pt")
-        except Exception as e:
-            if not _HOG_WARNING_PRINTED:
-                print(f"WARNING: Could not load ultralytics YOLO ({e}). Falling back to OpenCV HOG detector.")
-                _HOG_WARNING_PRINTED = True
-            _USE_HOG = True
-    return _YOLO_MODEL, _USE_HOG
-
-
-def check_person_yolo(
-    img_bgr: np.ndarray,
-    model,
-    conf_thresh: float = 0.35,
-    min_area_fraction: float = 0.015,
-) -> bool:
-    """Return True if a person is detected with conf >= conf_thresh and area >= min_area_fraction."""
-    img_h, img_w = img_bgr.shape[:2]
-    img_area = img_h * img_w
-    if img_area <= 0:
-        return False
-
-    results = model(img_bgr, verbose=False)
-    if not results or len(results) == 0:
-        return False
-
-    boxes = results[0].boxes
-    if boxes is None or len(boxes) == 0:
-        return False
-
-    for box in boxes:
-        cls_id = int(box.cls[0].item())
-        conf = float(box.conf[0].item())
-        cls_name = model.names.get(cls_id, "") if hasattr(model, "names") else ""
-        if (cls_id == 0 or cls_name == "person") and conf >= conf_thresh:
-            xyxy = box.xyxy[0].tolist()
-            w = max(0.0, float(xyxy[2] - xyxy[0]))
-            h = max(0.0, float(xyxy[3] - xyxy[1]))
-            box_area = w * h
-            if (box_area / img_area) >= min_area_fraction:
-                return True
-    return False
-
-
-def check_person_hog(img_bgr: np.ndarray, min_area_fraction: float = 0.015) -> bool:
-    """Fallback person detector using OpenCV HOG."""
-    img_h, img_w = img_bgr.shape[:2]
-    img_area = img_h * img_w
-    if img_area <= 0:
-        return False
-
-    hog = cv2.HOGDescriptor()
-    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-    rects, weights = hog.detectMultiScale(img_bgr, winStride=(8, 8), padding=(4, 4), scale=1.05)
-    for (x, y, w, h), weight in zip(rects, weights):
-        w_val = float(weight[0]) if hasattr(weight, "__iter__") else float(weight)
-        box_area = float(w * h)
-        if (box_area / img_area) >= min_area_fraction and w_val >= 0.35:
-            return True
-    return False
-
-
-def detect_person(
-    img_bgr: np.ndarray,
-    model=None,
-    use_hog: bool = False,
-    conf_thresh: float = 0.35,
-    min_area_fraction: float = 0.015,
-) -> bool:
-    """Detect person using YOLOv8n or OpenCV HOG fallback."""
-    if model is not None and not use_hog:
-        return check_person_yolo(img_bgr, model, conf_thresh, min_area_fraction)
-    if use_hog:
-        return check_person_hog(img_bgr, min_area_fraction)
-
-    m, hog = get_person_detector()
-    if hog or m is None:
-        return check_person_hog(img_bgr, min_area_fraction)
-    return check_person_yolo(img_bgr, m, conf_thresh, min_area_fraction)
+from studio.vision.people import (
+    get_person_detector,
+    check_person_yolo,
+    check_person_hog,
+    detect_person,
+    contains_person,
+)
 
 
 def check_dark_or_low_res(

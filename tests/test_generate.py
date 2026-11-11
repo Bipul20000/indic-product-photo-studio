@@ -203,3 +203,96 @@ def test_product_family_rule_and_diverse_pick():
     picked_all = pick_diverse_products(unique_family_files, 10)
     assert len(picked_all) == 6
 
+
+def test_contains_person_mocked_detector():
+    """Verify contains_person min_box_area filter and ignore_mask overlap logic."""
+    from unittest.mock import MagicMock
+    from studio.vision.people import contains_person, detect_people
+
+    # 1000x1000 image (area = 1,000,000)
+    img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+
+    def make_mock(box_xyxy, conf_val=0.8):
+        box_mock = MagicMock()
+        box_mock.cls = [MagicMock(item=lambda: 0)]
+        box_mock.conf = [MagicMock(item=lambda: conf_val)]
+        box_mock.xyxy = [MagicMock(tolist=lambda: box_xyxy)]
+
+        res_mock = MagicMock()
+        res_mock.boxes = [box_mock]
+
+        m = MagicMock()
+        m.names = {0: "person"}
+        m.return_value = [res_mock]
+        return m
+
+    # 1. Box with area < 0.01 (e.g. 50x50 = 2,500 px = 0.25%) -> False
+    m_small = make_mock([100, 100, 150, 150])
+    assert contains_person(img, conf=0.35, min_box_area=0.01, model=m_small) is False
+
+    # 2. Box with area >= 0.01 (e.g. 200x200 = 40,000 px = 4.0%) -> True
+    m_large = make_mock([100, 100, 300, 300])
+    assert contains_person(img, conf=0.35, min_box_area=0.01, model=m_large) is True
+
+    # 3. Box with ignore_mask: box is [100, 100, 300, 300] (200x200 = 40,000 px)
+    # Mask covers [100:300, 100:300] completely (100% overlap > 50%) -> False
+    mask_full = np.zeros((1000, 1000), dtype=np.uint8)
+    mask_full[100:300, 100:300] = 255
+    assert contains_person(img, conf=0.35, min_box_area=0.01, ignore_mask=mask_full, model=m_large) is False
+
+    # Mask covers only [100:150, 100:200] (50x100 = 5,000 px = 12.5% overlap <= 50%) -> True
+    mask_partial = np.zeros((1000, 1000), dtype=np.uint8)
+    mask_partial[100:150, 100:200] = 255
+    assert contains_person(img, conf=0.35, min_box_area=0.01, ignore_mask=mask_partial, model=m_large) is True
+
+
+def test_pipeline_retry_loop_on_person(monkeypatch):
+    """Verify that generation path retries up to 3 times if person is detected, recording attempts."""
+    # 1000x1000 image with a white product square in the center
+    fake_img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+    fake_img[300:700, 300:700] = 255
+
+    generator = FakeBackgroundGenerator()
+
+    # Mock contains_person to return True twice, then False
+    call_count = 0
+
+    def mock_contains_person(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            return True
+        return False
+
+    monkeypatch.setattr("studio.pipeline.contains_person", mock_contains_person)
+
+    result = run_pipeline(
+        image_path=fake_img,
+        scene="diwali",
+        force=True,
+        generator=generator,
+    )
+
+    assert result.attempts == 3
+    assert result.person_flag is False
+    assert call_count == 3
+
+
+def test_sweep_config_grid_has_six_entries():
+    """Verify sweep config grid has exactly 6 parameter combinations."""
+    from scripts.sweep_gen import get_sweep_configs, SWEEP_CONFIGS
+
+    configs = get_sweep_configs()
+    assert len(configs) == 6
+    expected = [
+        (1.0, 0.80),
+        (1.0, 0.65),
+        (0.7, 0.80),
+        (0.7, 0.65),
+        (0.5, 0.80),
+        (0.5, 0.65),
+    ]
+    assert configs == expected
+    assert len(SWEEP_CONFIGS) == 6
+
+
