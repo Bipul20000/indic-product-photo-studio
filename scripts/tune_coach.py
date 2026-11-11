@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from studio.coach.coach import assess_photo
 from studio.coach.config import CoachConfig
 from studio.coach.io import load_image
 from studio.coach.mask_cache import get_mask
@@ -137,60 +138,72 @@ def compute_all_candidates(img: np.ndarray, mask: Optional[np.ndarray], config: 
     }
 
 
-def find_lower_threshold(
+def select_threshold(
     good_vals: List[float],
     bad_vals: List[float],
-    max_fpr: float = 0.05,
+    direction: str,  # "lower" or "upper"
+    fpr_cap: float,
+    all_vals: Optional[List[float]] = None,
+    default_threshold: Optional[float] = None,
 ) -> Tuple[float, float, float]:
-    """Find threshold T for a check that fails when value < T, maximizing recall subject to FPR <= max_fpr."""
+    """Select candidate threshold maximizing recall with single-check FPR <= fpr_cap.
+
+    Candidate thresholds are the midpoints between adjacent sorted unique feature values.
+    Break recall ties by lowest FPR, and if still tied, by the median of tied thresholds.
+
+    Returns:
+        (best_threshold, best_fpr, best_recall)
+    """
     n_good = len(good_vals)
     n_bad = len(bad_vals)
     if n_good == 0 or n_bad == 0:
-        return 0.0, 0.0, 0.0
+        return default_threshold or 0.0, 0.0, 0.0
 
-    candidates = sorted(list(set(good_vals + bad_vals)))
-    best_t = 0.0
-    best_recall = -1.0
-    best_fpr = 1.0
+    raw_vals = all_vals if all_vals is not None else (good_vals + bad_vals)
+    u = sorted(list(set(raw_vals)))
+    if len(u) <= 1:
+        return default_threshold or (u[0] if u else 0.0), 0.0, 0.0
 
+    candidates = [(u[i] + u[i + 1]) / 2.0 for i in range(len(u) - 1)]
+
+    qualifying = []
     for cand in candidates:
-        fpr = sum(1 for v in good_vals if v < cand) / n_good
-        if fpr <= max_fpr:
-            recall = sum(1 for v in bad_vals if v < cand) / n_bad
-            if recall > best_recall or (recall == best_recall and cand > best_t):
-                best_recall = recall
-                best_t = cand
-                best_fpr = fpr
+        if direction == "lower":
+            fpr = sum(1 for v in good_vals if v < cand) / n_good
+            rec = sum(1 for v in bad_vals if v < cand) / n_bad
+        else:
+            fpr = sum(1 for v in good_vals if v > cand) / n_good
+            rec = sum(1 for v in bad_vals if v > cand) / n_bad
 
-    return best_t, best_fpr, best_recall
+        if fpr <= fpr_cap:
+            qualifying.append({"threshold": cand, "fpr": fpr, "recall": rec})
+
+    if not qualifying:
+        fb_t = default_threshold if default_threshold is not None else (u[0] if direction == "lower" else u[-1])
+        return fb_t, 0.0, 0.0
+
+    max_rec = max(q["recall"] for q in qualifying)
+    tied_rec = [q for q in qualifying if q["recall"] == max_rec]
+    min_fpr = min(q["fpr"] for q in tied_rec)
+    tied_fpr = [q for q in tied_rec if q["fpr"] == min_fpr]
+
+    tied_cands = [q["threshold"] for q in tied_fpr]
+    best_t = float(np.median(tied_cands))
+    return best_t, min_fpr, max_rec
 
 
-def find_upper_threshold(
-    good_vals: List[float],
-    bad_vals: List[float],
-    max_fpr: float = 0.05,
-) -> Tuple[float, float, float]:
-    """Find threshold T for a check that fails when value > T, maximizing recall subject to FPR <= max_fpr."""
-    n_good = len(good_vals)
-    n_bad = len(bad_vals)
-    if n_good == 0 or n_bad == 0:
-        return 0.0, 0.0, 0.0
-
-    candidates = sorted(list(set(good_vals + bad_vals)))
-    best_t = float("inf")
-    best_recall = -1.0
-    best_fpr = 1.0
-
-    for cand in candidates:
-        fpr = sum(1 for v in good_vals if v > cand) / n_good
-        if fpr <= max_fpr:
-            recall = sum(1 for v in bad_vals if v > cand) / n_bad
-            if recall > best_recall or (recall == best_recall and cand < best_t):
-                best_recall = recall
-                best_t = cand
-                best_fpr = fpr
-
-    return best_t, best_fpr, best_recall
+def choose_qualifying_cap(
+    cap_results: List[Dict[str, Any]],
+    max_combined_far: float = 0.10,
+) -> float:
+    """Select largest cap with combined false alarm rate <= max_combined_far; fallback to 0.0 with warning."""
+    qualifying = [r for r in cap_results if r["combined_far"] <= max_combined_far]
+    if qualifying:
+        best = max(qualifying, key=lambda r: r["cap"])
+        return float(best["cap"])
+    else:
+        print("\nWarning: No cap achieved combined false alarm rate <= 10.0%. Using cap 0.0.")
+        return 0.0
 
 
 def main() -> None:
@@ -228,6 +241,8 @@ def main() -> None:
             "label": row["label"],
             "reason": row["reason"],
             "source": row["source"],
+            "img": img,
+            "mask": mask,
             **feats,
         }
         samples.append(sample)
@@ -240,7 +255,7 @@ def main() -> None:
 
     print(f"Tune split: {len(good_samples)} good, {len(bad_blur)} bad-blur, {len(bad_dark)} bad-dark, {len(bad_bright)} bad-bright, {len(bad_clutter)} bad-clutter\n")
 
-    # Define all candidate checks: (check_category, candidate_name, feat_key, direction, finder_fn)
+    # Define candidate feature sets per check category: (name, feature_key, direction, bad_group)
     checks = {
         "Blur": [
             ("tile_p90", "blur_tile_p90", "lower", bad_blur),
@@ -264,76 +279,176 @@ def main() -> None:
         ],
     }
 
-    eval_results = {}
-    chosen = {}
+    caps = [0.05, 0.04, 0.03, 0.02, 0.015, 0.01, 0.005, 0.0]
+    cap_evaluations: List[Dict[str, Any]] = []
 
-    for cat, candidates in checks.items():
-        eval_results[cat] = []
-        for name, key, direction, bad_group in candidates:
-            g_vals = [s[key] for s in good_samples]
-            b_vals = [s[key] for s in bad_group]
-            if direction == "lower":
-                t, fpr, rec = find_lower_threshold(g_vals, b_vals, max_fpr=0.05)
+    for cap in caps:
+        chosen_per_cat: Dict[str, Dict[str, Any]] = {}
+        all_evals_for_cap: Dict[str, List[Dict[str, Any]]] = {}
+
+        for cat, candidate_list in checks.items():
+            cat_results = []
+            for name, key, direction, bad_group in candidate_list:
+                g_vals = [s[key] for s in good_samples]
+                b_vals = [s[key] for s in bad_group]
+                all_v = [s[key] for s in samples]
+                if cat == "Blur":
+                    def_t = cfg_base.blur_min
+                elif cat == "Dark":
+                    def_t = cfg_base.dark_max_p95
+                elif cat == "Bright":
+                    def_t = 0.05 if name == "product_clip_hi" else cfg_base.bright_min_p5
+                elif cat == "Clutter":
+                    def_t = 70.0 if name == "bg_lum_std" else cfg_base.clutter_max
+                else:
+                    def_t = None
+                t, fpr, rec = select_threshold(g_vals, b_vals, direction, cap, all_vals=all_v, default_threshold=def_t)
+                cat_results.append({
+                    "name": name,
+                    "key": key,
+                    "direction": direction,
+                    "threshold": t,
+                    "fpr": fpr,
+                    "recall": rec,
+                })
+            all_evals_for_cap[cat] = cat_results
+            # Choose best candidate feature by recall under cap (break tie by lowest FPR)
+            best_cand = max(cat_results, key=lambda r: (r["recall"], -r["fpr"]))
+            chosen_per_cat[cat] = best_cand
+
+        # Also compute tuned fallback thresholds under this cap for whole-image versions
+        fb_dark_t, _, _ = select_threshold(
+            [s["global_p95"] for s in good_samples],
+            [s["global_p95"] for s in bad_dark],
+            "lower",
+            cap,
+            all_vals=[s["global_p95"] for s in samples],
+            default_threshold=cfg_base.dark_max_p95,
+        )
+        fb_bright_t, _, _ = select_threshold(
+            [s["global_p5"] for s in good_samples],
+            [s["global_p5"] for s in bad_bright],
+            "upper",
+            cap,
+            all_vals=[s["global_p5"] for s in samples],
+            default_threshold=cfg_base.bright_min_p5,
+        )
+        fb_clutter_t, _, _ = select_threshold(
+            [s["global_border"] for s in good_samples],
+            [s["global_border"] for s in bad_clutter],
+            "upper",
+            cap,
+            all_vals=[s["global_border"] for s in samples],
+            default_threshold=cfg_base.clutter_max,
+        )
+
+        # Build candidate CoachConfig for this cap
+        cfg_cap = CoachConfig(
+            blur_method=chosen_per_cat["Blur"]["name"],
+            blur_min=chosen_per_cat["Blur"]["threshold"],
+            dark_feature=chosen_per_cat["Dark"]["name"],
+            dark_threshold=chosen_per_cat["Dark"]["threshold"],
+            dark_max_p95=fb_dark_t,
+            bright_feature=chosen_per_cat["Bright"]["name"],
+            bright_threshold=chosen_per_cat["Bright"]["threshold"],
+            bright_min_p5=fb_bright_t,
+            clutter_feature=chosen_per_cat["Clutter"]["name"],
+            clutter_threshold=chosen_per_cat["Clutter"]["threshold"],
+            clutter_max=fb_clutter_t,
+            chosen_cap=cap,
+            load_saved_thresholds=False,
+        )
+
+        # Evaluate combined Coach on all good tune images (resolution, blur, exposure, clutter, framing)
+        good_reps = [assess_photo(s["img"], mask=s["mask"], config=cfg_cap) for s in good_samples]
+        comb_far = (sum(1 for r in good_reps if not r.ok) / len(good_samples)) if good_samples else 0.0
+
+        # Compute recall per defect reason on bad tune images
+        reason_recalls: Dict[str, float] = {}
+        for r_name in ["blur", "bright", "clutter", "dark", "lowres"]:
+            b_sub = [s for s in samples if s["label"] == "bad" and s["reason"] == r_name]
+            if b_sub:
+                b_reps = [assess_photo(s["img"], mask=s["mask"], config=cfg_cap) for s in b_sub]
+                rec = sum(1 for r in b_reps if not r.ok) / len(b_sub)
+                reason_recalls[r_name] = rec
             else:
-                t, fpr, rec = find_upper_threshold(g_vals, b_vals, max_fpr=0.05)
-            eval_results[cat].append({
-                "name": name,
-                "key": key,
-                "direction": direction,
-                "threshold": t,
-                "fpr": fpr,
-                "recall": rec,
-            })
+                reason_recalls[r_name] = 0.0
 
-        # Pick candidate with highest recall (tie-break on lowest fpr)
-        best = max(eval_results[cat], key=lambda r: (r["recall"], -r["fpr"]))
-        chosen[cat] = best
+        cap_evaluations.append({
+            "cap": cap,
+            "combined_far": comb_far,
+            "reason_recalls": reason_recalls,
+            "chosen_per_cat": chosen_per_cat,
+            "fb_thresholds": {
+                "dark_max_p95": fb_dark_t,
+                "bright_min_p5": fb_bright_t,
+                "clutter_max": fb_clutter_t,
+            },
+            "all_evals": all_evals_for_cap,
+        })
 
-    # Print comprehensive tuning table
-    print("=" * 86)
-    print("Shoot Coach Parameter Tuning (Phase 2b - Full Candidate Evaluation, Split=Tune)")
-    print("=" * 86)
-    print(f"{'Category':<10} | {'Candidate Feature':<18} | {'Direction':<9} | {'Threshold':>10} | {'FPR':>7} | {'Recall':>7} | {'Chosen':^6}")
-    print("-" * 86)
+    # Pick qualifying cap
+    chosen_cap_val = choose_qualifying_cap(cap_evaluations, max_combined_far=0.10)
+    chosen_record = next(r for r in cap_evaluations if r["cap"] == chosen_cap_val)
 
-    for cat, rows in eval_results.items():
-        for r in rows:
-            is_best = (r["name"] == chosen[cat]["name"])
-            chosen_mark = "  *   " if is_best else "      "
-            dir_str = "value < T" if r["direction"] == "lower" else "value > T"
-            thresh_fmt = f"{r['threshold']:.4f}" if "density" in r["name"] or "ratio" in r["name"] or "clip" in r["name"] else f"{r['threshold']:.2f}"
-            print(f"{cat:<10} | {r['name']:<18} | {dir_str:<9} | {thresh_fmt:>10} | {r['fpr']*100:>6.1f}% | {r['recall']*100:>6.1f}% | {chosen_mark}")
-        print("-" * 86)
+    # Print Table of Cap evaluations
+    print("=" * 105)
+    print("Shoot Coach Joint False-Alarm Budget Tuning (Phase 2c - split=tune)")
+    print("=" * 105)
+    print(f"{'Cap':<7} | {'Combined FAR':>12} | {'Blur Rec':>8} | {'Bright Rec':>10} | {'Clutter Rec':>11} | {'Dark Rec':>8} | {'Lowres Rec':>10} | {'Status':^12}")
+    print("-" * 105)
 
-    # Save to configs/coach_thresholds.json
-    best_blur = chosen["Blur"]
-    best_dark = chosen["Dark"]
-    best_bright = chosen["Bright"]
-    best_clutter = chosen["Clutter"]
+    for r in cap_evaluations:
+        c = r["cap"]
+        far = r["combined_far"]
+        rec = r["reason_recalls"]
+        is_chosen = (c == chosen_cap_val)
+        status_str = "CHOSEN (*)" if is_chosen else ""
+        print(
+            f"{c:<7.3f} | {far * 100:>11.1f}% | {rec['blur'] * 100:>7.1f}% | {rec['bright'] * 100:>9.1f}% | "
+            f"{rec['clutter'] * 100:>10.1f}% | {rec['dark'] * 100:>7.1f}% | {rec['lowres'] * 100:>9.1f}% | {status_str:^12}"
+        )
+    print("=" * 105)
 
-    global_dark = next(r for r in eval_results["Dark"] if r["name"] == "global_p95")
-    global_bright = next(r for r in eval_results["Bright"] if r["name"] == "global_p5")
-    global_clutter = next(r for r in eval_results["Clutter"] if r["name"] == "global_border")
+    # Print chosen feature and threshold for every check
+    chosen_checks = chosen_record["chosen_per_cat"]
+    fb_t = chosen_record["fb_thresholds"]
+
+    print(f"\nChosen Features and Thresholds (cap={chosen_cap_val:.3f}, combined FAR={chosen_record['combined_far']*100:.1f}%):")
+    print("-" * 75)
+    for cat in ["Blur", "Dark", "Bright", "Clutter"]:
+        ch = chosen_checks[cat]
+        dir_str = "value < T" if ch["direction"] == "lower" else "value > T"
+        t_fmt = f"{ch['threshold']:.4f}" if "density" in ch["name"] or "ratio" in ch["name"] or "clip" in ch["name"] else f"{ch['threshold']:.2f}"
+        print(f"  {cat:<8}: feature='{ch['name']}', threshold={t_fmt} ({dir_str}), single-check FPR={ch['fpr']*100:.1f}%, recall={ch['recall']*100:.1f}%")
+    print("-" * 75)
+
+    # Save choice to configs/coach_thresholds.json
+    best_blur = chosen_checks["Blur"]
+    best_dark = chosen_checks["Dark"]
+    best_bright = chosen_checks["Bright"]
+    best_clutter = chosen_checks["Clutter"]
 
     thresholds_dict = {
+        "chosen_cap": chosen_cap_val,
         "blur_method": best_blur["name"],
         "blur_min": round(best_blur["threshold"], 2),
         "dark_feature": best_dark["name"],
         "dark_threshold": round(best_dark["threshold"], 2),
-        "dark_max_p95": round(global_dark["threshold"], 2),
+        "dark_max_p95": round(fb_t["dark_max_p95"], 2),
         "bright_feature": best_bright["name"],
         "bright_threshold": round(best_bright["threshold"], 4),
-        "bright_min_p5": round(global_bright["threshold"], 2),
+        "bright_min_p5": round(fb_t["bright_min_p5"], 2),
         "clutter_feature": best_clutter["name"],
         "clutter_threshold": round(best_clutter["threshold"], 4),
-        "clutter_max": round(global_clutter["threshold"], 4),
+        "clutter_max": round(fb_t["clutter_max"], 4),
     }
 
     output_cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_cfg_path, "w", encoding="utf-8") as f:
         json.dump(thresholds_dict, f, indent=4)
 
-    print(f"\nChosen candidate parameters saved to: {output_cfg_path}")
+    print(f"Saved threshold settings with chosen cap {chosen_cap_val} to: {output_cfg_path}")
 
 
 if __name__ == "__main__":

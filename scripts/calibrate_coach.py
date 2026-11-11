@@ -4,9 +4,136 @@ from pathlib import Path
 import sys
 from typing import Dict, List
 
+import cv2
+import numpy as np
+
 from studio.coach import CoachConfig, assess_photo, load_image
 from studio.coach.mask_cache import get_mask
+from studio.compose import make_white_background
 from studio.env import get_output_dir
+
+
+def make_thumb(image: np.ndarray, target_w: int = 280, target_h: int = 280) -> np.ndarray:
+    """Pad and resize image to fit in target_w x target_h box on white background."""
+    h, w = image.shape[:2]
+    if h == 0 or w == 0:
+        return np.full((target_h, target_w, 3), 255, dtype=np.uint8)
+    scale = min(target_w / w, target_h / h)
+    nw = max(1, int(round(w * scale)))
+    nh = max(1, int(round(h * scale)))
+    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    resized = cv2.resize(image, (nw, nh), interpolation=interp)
+
+    canvas = np.full((target_h, target_w, 3), 255, dtype=np.uint8)
+    x_off = (target_w - nw) // 2
+    y_off = (target_h - nh) // 2
+    canvas[y_off : y_off + nh, x_off : x_off + nw] = resized
+    cv2.rectangle(canvas, (0, 0), (target_w - 1, target_h - 1), (220, 220, 220), 1)
+    return canvas
+
+
+def create_rejected_good_contact_sheet(
+    rejected_origs: List[Dict],
+    images_dir: Path,
+    out_path: Path,
+    config: CoachConfig,
+    max_items: int = 16,
+) -> None:
+    """Generate contact sheet for rejected good originals up to max_items."""
+    items = rejected_origs[:max_items]
+    if not items:
+        blank = np.full((100, 400, 3), 255, dtype=np.uint8)
+        cv2.putText(blank, "No rejected good originals.", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 150, 0), 2)
+        cv2.imwrite(str(out_path), blank)
+        return
+
+    thumb_w = 280
+    thumb_h = 280
+    margin = 16
+    header_h = 44
+    caption_h = 46
+    row_h = thumb_h + caption_h + margin
+
+    sheet_w = margin + 3 * (thumb_w + margin)
+    sheet_h = header_h + len(items) * row_h + margin
+    sheet = np.full((sheet_h, sheet_w, 3), 248, dtype=np.uint8)
+
+    # Header bar
+    cv2.rectangle(sheet, (0, 0), (sheet_w, header_h), (235, 235, 235), -1)
+    cv2.line(sheet, (0, header_h), (sheet_w, header_h), (210, 210, 210), 1)
+
+    headers = ["1. Original Photo", "2. Mask Overlay (Red 40%)", "3. White-Background Output"]
+    for col_idx, title in enumerate(headers):
+        x = margin + col_idx * (thumb_w + margin)
+        cv2.putText(sheet, title, (x + 10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (40, 40, 40), 1, cv2.LINE_AA)
+
+    # Rows
+    for row_idx, item in enumerate(items):
+        y_top = header_h + margin + row_idx * row_h
+        img_p = images_dir / item["filename"]
+        img = load_image(img_p)
+        mask = get_mask(img_p, key=item["filename"])
+
+        # Col 1: Original
+        th_orig = make_thumb(img, thumb_w, thumb_h)
+
+        # Col 2: Mask Overlay (Red, 40% alpha)
+        overlay = img.copy().astype(np.float32)
+        red_bgr = np.array([0, 0, 255], dtype=np.float32)
+        m_bool = (mask > 0)
+        overlay[m_bool] = 0.6 * overlay[m_bool] + 0.4 * red_bgr
+        overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+        th_overlay = make_thumb(overlay, thumb_w, thumb_h)
+
+        # Col 3: Final white-background output
+        try:
+            white_out, _, _ = make_white_background(img, config=config)
+            th_white = make_thumb(white_out, thumb_w, thumb_h)
+        except Exception:
+            th_white = np.full((thumb_h, thumb_w, 3), 255, dtype=np.uint8)
+
+        # Place thumbnails
+        cols = [th_orig, th_overlay, th_white]
+        for col_idx, th in enumerate(cols):
+            x = margin + col_idx * (thumb_w + margin)
+            sheet[y_top : y_top + thumb_h, x : x + thumb_w] = th
+
+        # Caption under row
+        cap_y = y_top + thumb_h + 16
+        checks_str = item.get("failing_checks", "")
+        failing_vals = []
+        for chk in ["resolution", "blur", "brightness", "clutter", "framing"]:
+            if chk in checks_str:
+                val = item.get(chk, "")
+                failing_vals.append(f"{chk}={val}")
+        failing_info_str = ", ".join(failing_vals)
+
+        cv2.putText(
+            sheet,
+            f"#{row_idx + 1}: {item['filename']} [{item['split']}]",
+            (margin, cap_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.46,
+            (20, 20, 20),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            sheet,
+            f"Failed: [{checks_str}]  |  Values: {failing_info_str}",
+            (margin, cap_y + 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.43,
+            (0, 0, 180),
+            1,
+            cv2.LINE_AA,
+        )
+        sep_y = y_top + row_h - (margin // 2)
+        cv2.line(sheet, (margin, sep_y), (sheet_w - margin, sep_y), (225, 225, 225), 1)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_path), sheet, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    print(f"Saved rejected goods contact sheet to: {out_path} ({len(items)} images)")
 
 
 def format_confusion_matrix(matrix: Dict[tuple, int]) -> str:
@@ -196,6 +323,20 @@ def main() -> None:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(eval_records)
+
+    # Write contact sheet of rejected good originals (up to 16)
+    rejected_good_origs = [
+        r for r in eval_records
+        if r["source"] == "original" and r["human_label"] == "good" and r["coach_verdict"] == "bad"
+    ]
+    contact_sheet_path = out_dir / "rejected_good_sheet.jpg"
+    create_rejected_good_contact_sheet(
+        rejected_good_origs,
+        images_dir=images_dir,
+        out_path=contact_sheet_path,
+        config=cfg,
+        max_items=16,
+    )
 
     print(f"\nSaved calibration log to: {calib_csv_path}")
 

@@ -38,16 +38,15 @@ def get_mask(
     filename = key if key.endswith(".png") else f"{key}.png"
     cache_file = target_dir / filename
 
-    if cache_file.exists():
-        cached = cv2.imread(str(cache_file), cv2.IMREAD_GRAYSCALE)
-        if cached is not None and cached.size > 0:
-            return cached
-
-    # Compute mask if not cached
     if isinstance(path_or_image, (str, Path)):
         img = load_image(path_or_image)
     else:
         img = path_or_image
+
+    if cache_file.exists():
+        cached = cv2.imread(str(cache_file), cv2.IMREAD_GRAYSCALE)
+        if cached is not None and cached.shape == img.shape[:2]:
+            return cached
 
     seg = segment_product(img)
     mask = seg.mask if seg.mask is not None and seg.mask.size > 0 else np.zeros(img.shape[:2], dtype=np.uint8)

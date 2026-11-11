@@ -34,6 +34,7 @@ _DEFAULTS = {
     "bright_threshold": None,
     "clutter_feature": "global_border",
     "clutter_threshold": None,
+    "chosen_cap": None,
 }
 
 
@@ -62,6 +63,7 @@ class CoachConfig:
     bright_threshold: Optional[float] = None
     clutter_feature: str = "global_border"
     clutter_threshold: Optional[float] = None
+    chosen_cap: Optional[float] = None
 
     def __post_init__(self):
         """Load threshold overrides from configs/coach_thresholds.json if available."""

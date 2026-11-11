@@ -282,3 +282,60 @@ def test_mask_fallback_when_mask_none_or_small():
     res_c_small = check_clutter(img, mask=mask_small, config=cfg)
     assert res_c_small.used_fallback is True
 
+
+def test_threshold_selection_rule_and_cap_budget():
+    """Verify threshold selection rule (recall -> FPR -> median) and cap budget loop."""
+    from scripts.tune_coach import choose_qualifying_cap, select_threshold
+
+    # 1. Higher recall wins under the cap
+    # Good values: [20, 40], Bad values: [5, 15]
+    # At T=10: bad < 10 is {5} (rec=0.5), good < 10 is 0 (fpr=0.0)
+    # At T=25: bad < 25 is {5, 15} (rec=1.0), good < 25 is {20} (fpr=0.5)
+    # With fpr_cap=0.50, T=25 has higher recall (1.0 > 0.5), so it wins.
+    t, fpr, rec = select_threshold([20.0, 40.0], [5.0, 15.0], direction="lower", fpr_cap=0.50)
+    assert rec == 1.0
+    assert t > 15.0
+
+    # 2. Tie in recall goes to the lowest FPR
+    # Good values: [20, 40], Bad values: [5, 10]
+    # Unique: [5, 10, 20, 40]. Midpoints: [7.5, 15.0, 30.0]
+    # At T=15.0: bad < 15 is {5, 10} (rec=1.0), good < 15 is 0 (fpr=0.0)
+    # At T=30.0: bad < 30 is {5, 10} (rec=1.0), good < 30 is {20} (fpr=0.5)
+    # With fpr_cap=0.50, both have recall 1.0, but T=15.0 has lower FPR (0.0 < 0.5), so T=15.0 wins.
+    t, fpr, rec = select_threshold([20.0, 40.0], [5.0, 10.0], direction="lower", fpr_cap=0.50)
+    assert rec == 1.0
+    assert fpr == 0.0
+    assert t == 15.0
+
+    # 3. Tie in recall AND lowest FPR goes to median of tied thresholds
+    # Good values: [50, 60], Bad values: [10, 20]
+    # all_vals injects points [30, 34, 38] between bad and good
+    # Midpoints between 20 and 50 are 25.0, 32.0, 36.0, 44.0 (all rec=1.0, fpr=0.0)
+    # Tied thresholds: [25.0, 32.0, 36.0, 44.0] -> median is (32.0 + 36.0)/2 = 34.0
+    all_v = [10.0, 20.0, 30.0, 34.0, 38.0, 50.0, 60.0]
+    t, fpr, rec = select_threshold([50.0, 60.0], [10.0, 20.0], direction="lower", fpr_cap=0.05, all_vals=all_v)
+    assert rec == 1.0
+    assert fpr == 0.0
+    assert t == 34.0
+
+    # 4. Cap budget loop picks the largest qualifying cap
+    cap_results = [
+        {"cap": 0.05, "combined_far": 0.16},
+        {"cap": 0.04, "combined_far": 0.13},
+        {"cap": 0.03, "combined_far": 0.09},  # Largest cap <= 0.10
+        {"cap": 0.02, "combined_far": 0.06},
+        {"cap": 0.01, "combined_far": 0.03},
+        {"cap": 0.00, "combined_far": 0.01},
+    ]
+    chosen = choose_qualifying_cap(cap_results, max_combined_far=0.10)
+    assert chosen == 0.03
+
+    # Fallback to cap 0.0 when none qualifies
+    no_qualify = [
+        {"cap": 0.05, "combined_far": 0.35},
+        {"cap": 0.00, "combined_far": 0.30},
+    ]
+    chosen_fb = choose_qualifying_cap(no_qualify, max_combined_far=0.10)
+    assert chosen_fb == 0.0
+
+
