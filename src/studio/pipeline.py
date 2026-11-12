@@ -11,7 +11,7 @@ from studio.coach.config import CoachConfig
 from studio.coach.io import load_image
 from studio.compose.compose import _resolve_preset, composite, place_product
 from studio.generate.backgrounds import BackgroundGenerator, FakeBackgroundGenerator
-from studio.generate.config import GenConfig, load_scenes
+from studio.generate.config import GenConfig, apply_trigger, load_scenes
 from studio.generate.prep import build_inpaint_inputs, gen_size
 from studio.segment.segmenter import SegmentResult
 from studio.vision.people import contains_person
@@ -180,6 +180,10 @@ def run_pipeline(
     # Lazy-load generator if not provided
     if generator is None:
         generator = BackgroundGenerator(config=g_cfg)
+
+    # Apply trigger if LoRA is active
+    gen_lora = getattr(getattr(generator, "config", None), "lora_path", None) or g_cfg.lora_path
+    prompt = apply_trigger(scene, prompt, lora_used=bool(gen_lora))
 
     # Generate background with retry loop on people (up to 3 retries, 1-4 attempts)
     attempts = 1

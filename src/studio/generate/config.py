@@ -90,3 +90,61 @@ class GenConfig:
     lora_path: Optional[str] = None
     lora_scale: float = 0.8
     erode_px: int = 6
+
+
+def _find_lora_themes_file(path: Union[str, Path] = "configs/lora_themes.yaml") -> Path:
+    """Locate lora_themes.yaml configuration file."""
+    p = Path(path)
+    if p.exists():
+        return p
+    repo_p = Path(__file__).resolve().parents[3] / "configs" / "lora_themes.yaml"
+    if repo_p.exists():
+        return repo_p
+    return p
+
+
+def load_theme_triggers(path: Union[str, Path] = "configs/lora_themes.yaml") -> Dict[str, str]:
+    """Load theme triggers from configs/lora_themes.yaml."""
+    resolved_path = _find_lora_themes_file(path)
+    if not resolved_path.exists():
+        return {}
+    with open(resolved_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    triggers = {}
+    for theme_name, theme_info in data.items():
+        if isinstance(theme_info, dict) and "trigger" in theme_info:
+            triggers[theme_name] = theme_info["trigger"]
+    return triggers
+
+
+def apply_trigger(scene: str, prompt: str, lora_used: bool = True) -> str:
+    """Prepend the theme trigger to the scene prompt when LoRA is used.
+
+    Loads the trigger per theme from configs/lora_themes.yaml.
+    The theme names equal the scene names diwali, raksha_bandhan, holi,
+    wedding, and indian_home. 'minimal' and 'white' get no trigger.
+
+    Args:
+        scene: Scene name (e.g. 'diwali', 'minimal', 'white').
+        prompt: Scene prompt string.
+        lora_used: Boolean indicating if LoRA is used in generation.
+
+    Returns:
+        Prompt with trigger prepended if applicable, otherwise original prompt.
+    """
+    if not lora_used:
+        return prompt
+
+    if scene in ("minimal", "white"):
+        return prompt
+
+    triggers = load_theme_triggers()
+    trigger = triggers.get(scene)
+    if not trigger:
+        return prompt
+
+    if not prompt:
+        return trigger
+
+    return f"{trigger}, {prompt}"
+

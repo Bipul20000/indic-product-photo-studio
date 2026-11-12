@@ -307,6 +307,7 @@ def main():
             "person_flag",
             "controlnet_scale",
             "fill",
+            "lora",
         ],
     )
     if not manifest_exists:
@@ -368,6 +369,7 @@ def main():
                     "person_flag": res.person_flag,
                     "controlnet_scale": res.controlnet_scale,
                     "fill": res.fill,
+                    "lora": args.lora or "",
                 }
                 manifest_writer.writerow(manifest_row)
                 manifest_file.flush()

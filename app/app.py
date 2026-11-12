@@ -18,6 +18,8 @@ def build_app(
     fake_generator: bool = False,
     default_preset: str = "square_1000",
     generator: Optional[Any] = None,
+    lora: Optional[str] = None,
+    lora_scale: float = 0.8,
 ) -> gr.Blocks:
     """Build Gradio Blocks UI and connect event handlers."""
     cuda_available = torch.cuda.is_available()
@@ -30,15 +32,19 @@ def build_app(
         if _cached_generator is not None:
             return _cached_generator
 
+        from studio.generate.config import GenConfig
+
+        gen_cfg = GenConfig(lora_path=lora, lora_scale=lora_scale)
+
         if is_demo_mode:
             from studio.generate.backgrounds import FakeBackgroundGenerator
 
-            _cached_generator = FakeBackgroundGenerator()
+            _cached_generator = FakeBackgroundGenerator(config=gen_cfg)
         else:
             gr.Info("Loading models, first run takes a minute...")
             from studio.generate.backgrounds import BackgroundGenerator
 
-            _cached_generator = BackgroundGenerator()
+            _cached_generator = BackgroundGenerator(config=gen_cfg)
         return _cached_generator
 
     with gr.Blocks(title="Indic Product Photo Studio") as demo:
@@ -179,6 +185,8 @@ def parse_args():
     parser.add_argument("--port", type=int, default=7860, help="Port to run the app on (default 7860)")
     parser.add_argument("--fake-generator", action="store_true", help="Use FakeBackgroundGenerator instead of GPU diffusion model")
     parser.add_argument("--preset", type=str, default="square_1000", help="Default canvas preset (default square_1000)")
+    parser.add_argument("--lora", type=str, default=None, help="Optional path to LoRA weights")
+    parser.add_argument("--lora-scale", type=float, default=0.8, help="LoRA cross-attention scale (default 0.8)")
     return parser.parse_args()
 
 
@@ -187,6 +195,8 @@ def main():
     demo = build_app(
         fake_generator=args.fake_generator,
         default_preset=args.preset,
+        lora=args.lora,
+        lora_scale=args.lora_scale,
     )
     demo.launch(
         server_name="127.0.0.1",

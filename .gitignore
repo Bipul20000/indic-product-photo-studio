@@ -41,7 +41,10 @@ outputs/
 *.onnx
 *.safetensors
 *.ckpt
-models/
+models/*
+!models/.gitkeep
+!models/festive_lora/
+!models/festive_lora/pytorch_lora_weights.safetensors
 weights/
 
 # OS / IDE
