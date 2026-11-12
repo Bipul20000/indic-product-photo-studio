@@ -11,7 +11,7 @@ from studio.coach.config import CoachConfig
 from studio.coach.io import load_image
 from studio.compose.compose import _resolve_preset, composite, place_product
 from studio.generate.backgrounds import BackgroundGenerator, FakeBackgroundGenerator
-from studio.generate.config import GenConfig, apply_trigger, load_scenes
+from studio.generate.config import GenConfig, apply_trigger, effective_lora_scale, load_scenes
 from studio.generate.prep import build_inpaint_inputs, gen_size
 from studio.segment.segmenter import SegmentResult
 from studio.vision.people import contains_person
@@ -34,6 +34,7 @@ class PipelineResult:
     person_flag: bool = False
     fill: float = 0.80
     controlnet_scale: float = 0.5
+    scale: float = 0.0
 
 
 def run_pipeline(
@@ -48,6 +49,7 @@ def run_pipeline(
     gen_config: Optional[GenConfig] = None,
     fill: Optional[float] = None,
     controlnet_scale: Optional[float] = None,
+    lora_scale: Optional[float] = None,
 ) -> PipelineResult:
     """Run the photo studio generation pipeline for white background or AI scenes.
 
@@ -84,6 +86,14 @@ def run_pipeline(
     else:
         effective_cn = 0.5
 
+    # Resolve effective LoRA scale
+    gen_lora = getattr(getattr(generator, "config", None), "lora_path", None) or (gen_config.lora_path if gen_config else None)
+    lora_used = bool(gen_lora)
+    scale_override = lora_scale if lora_scale is not None else getattr(getattr(generator, "config", None), "lora_scale", None)
+    if scale_override is None and gen_config is not None and gen_config.lora_scale is not None:
+        scale_override = gen_config.lora_scale
+    effective_scale = effective_lora_scale(scene, override=scale_override) if lora_used else 0.0
+
     if isinstance(image_path, (str, Path)):
         img_bgr = load_image(image_path)
     else:
@@ -107,6 +117,7 @@ def run_pipeline(
             person_flag=False,
             fill=effective_fill,
             controlnet_scale=effective_cn,
+            scale=effective_scale,
         )
 
     canvas_w, canvas_h = _resolve_preset(marketplace)
@@ -129,6 +140,7 @@ def run_pipeline(
             person_flag=False,
             fill=effective_fill,
             controlnet_scale=effective_cn,
+            scale=effective_scale,
         )
 
     # Place product on preset canvas with configured fill
@@ -152,6 +164,7 @@ def run_pipeline(
             person_flag=False,
             fill=effective_fill,
             controlnet_scale=effective_cn,
+            scale=effective_scale,
         )
 
     # AI Scene Background Generation
@@ -181,9 +194,8 @@ def run_pipeline(
     if generator is None:
         generator = BackgroundGenerator(config=g_cfg)
 
-    # Apply trigger if LoRA is active
-    gen_lora = getattr(getattr(generator, "config", None), "lora_path", None) or g_cfg.lora_path
-    prompt = apply_trigger(scene, prompt, lora_used=bool(gen_lora))
+    # Apply trigger if LoRA is active and scale > 0
+    prompt = apply_trigger(scene, prompt, lora_used=lora_used, scale=effective_scale)
 
     # Generate background with retry loop on people (up to 3 retries, 1-4 attempts)
     attempts = 1
@@ -199,6 +211,7 @@ def run_pipeline(
             "negative": negative,
             "seed": current_seed,
             "controlnet_scale": effective_cn,
+            "lora_scale": effective_scale,
         }
 
         gen_pil = generator.generate(**gen_kwargs)
@@ -249,4 +262,5 @@ def run_pipeline(
         person_flag=person_flag,
         fill=effective_fill,
         controlnet_scale=effective_cn,
+        scale=effective_scale,
     )

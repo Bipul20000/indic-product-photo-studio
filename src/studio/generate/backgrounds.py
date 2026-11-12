@@ -32,6 +32,7 @@ class FakeBackgroundGenerator:
         negative: str,
         seed: int = 0,
         controlnet_scale: Optional[float] = None,
+        lora_scale: Optional[float] = None,
     ) -> Image.Image:
         """Generate a deterministic smooth gradient background image matching scene and seed."""
         w, h = init_image.size
@@ -173,6 +174,7 @@ class BackgroundGenerator:
         negative: str,
         seed: int = 0,
         controlnet_scale: Optional[float] = None,
+        lora_scale: Optional[float] = None,
     ) -> Image.Image:
         """Run ControlNet inpainting pipeline to generate background.
 
@@ -211,7 +213,29 @@ class BackgroundGenerator:
         }
 
         if self.config.lora_path:
-            call_kwargs["cross_attention_kwargs"] = {"scale": self.config.lora_scale}
+            eff_scale = self.config.lora_scale if lora_scale is None else float(lora_scale)
+            if eff_scale is None:
+                eff_scale = 0.8
+
+            if eff_scale <= 0.0:
+                if hasattr(self.pipe, "disable_lora"):
+                    self.pipe.disable_lora()
+                elif hasattr(self.pipe, "set_adapters"):
+                    try:
+                        self.pipe.set_adapters(["default"], [0.0])
+                    except Exception:
+                        pass
+            else:
+                if hasattr(self.pipe, "enable_lora"):
+                    self.pipe.enable_lora()
+                if hasattr(self.pipe, "set_adapters"):
+                    try:
+                        self.pipe.set_adapters(["default"], [float(eff_scale)])
+                    except Exception:
+                        try:
+                            self.pipe.set_adapters(adapter_weights=[float(eff_scale)])
+                        except Exception:
+                            pass
 
         output = self.pipe(**call_kwargs)
         result_pil = output.images[0]

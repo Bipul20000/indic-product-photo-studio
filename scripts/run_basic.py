@@ -10,8 +10,13 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import cv2
 import numpy as np
 
-# Ensure src is on Python path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+# Ensure repo root and src are on Python path
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+_SRC_DIR = _REPO_ROOT / "src"
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 from studio.coach.io import load_image
 from studio.compose.compose import PRESETS

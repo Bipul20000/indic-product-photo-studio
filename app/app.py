@@ -19,7 +19,7 @@ def build_app(
     default_preset: str = "square_1000",
     generator: Optional[Any] = None,
     lora: Optional[str] = None,
-    lora_scale: float = 0.8,
+    lora_scale: Optional[float] = None,
 ) -> gr.Blocks:
     """Build Gradio Blocks UI and connect event handlers."""
     cuda_available = torch.cuda.is_available()
@@ -186,7 +186,7 @@ def parse_args():
     parser.add_argument("--fake-generator", action="store_true", help="Use FakeBackgroundGenerator instead of GPU diffusion model")
     parser.add_argument("--preset", type=str, default="square_1000", help="Default canvas preset (default square_1000)")
     parser.add_argument("--lora", type=str, default=None, help="Optional path to LoRA weights")
-    parser.add_argument("--lora-scale", type=float, default=0.8, help="LoRA cross-attention scale (default 0.8)")
+    parser.add_argument("--lora-scale", type=float, default=None, help="Optional global override for LoRA scale")
     return parser.parse_args()
 
 

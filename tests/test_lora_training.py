@@ -159,7 +159,7 @@ def test_apply_trigger_each_theme():
     for theme, expected_trig in expected_triggers.items():
         assert triggers.get(theme) == expected_trig
         prompt = "a festive setting with lamps"
-        res = apply_trigger(scene=theme, prompt=prompt, lora_used=True)
+        res = apply_trigger(scene=theme, prompt=prompt, lora_used=True, scale=0.8)
         assert res == f"{expected_trig}, {prompt}"
 
 

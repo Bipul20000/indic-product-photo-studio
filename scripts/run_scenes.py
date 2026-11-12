@@ -6,6 +6,13 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+_SRC_DIR = _REPO_ROOT / "src"
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import cv2
 import numpy as np
 
@@ -27,7 +34,7 @@ def parse_args():
     parser.add_argument("--out", type=str, default="outputs/base_gen", help="Output directory.")
     parser.add_argument("--originals", type=str, default="data/coach_eval/originals/good", help="Directory of original photos.")
     parser.add_argument("--lora", type=str, default=None, help="Optional path to LoRA weights.")
-    parser.add_argument("--lora-scale", type=float, default=0.8, help="LoRA cross-attention scale.")
+    parser.add_argument("--lora-scale", type=float, default=None, help="Optional global override for LoRA scale.")
     parser.add_argument("--fill", type=float, default=None, help="Product canvas fill fraction override.")
     parser.add_argument("--controlnet-scale", type=float, default=None, help="ControlNet conditioning scale override.")
     parser.add_argument("--fake-generator", action="store_true", help="Use FakeBackgroundGenerator for CPU dry runs.")
@@ -171,6 +178,97 @@ def create_overview_sheet(
     print(f"\nSaved scene overview contact sheet to: {out_file}")
 
 
+def select_diverse_products(
+    originals_dir: Path,
+    n_products: int = 10,
+    coach_config: Optional[CoachConfig] = None,
+    exclude_file: Optional[Path] = None,
+    gate_csv_path: Optional[Path] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Select diverse passing products using Shoot Coach gating.
+
+    Args:
+        originals_dir: Directory containing candidate original photos.
+        n_products: Number of diverse product families to select.
+        coach_config: Optional CoachConfig thresholds.
+        exclude_file: Optional path to coach_eval_exclude.txt.
+        gate_csv_path: Optional path to write coach_gate.csv.
+
+    Returns:
+        Tuple of (selected_products_list, gate_records_list).
+    """
+    config = coach_config or CoachConfig()
+    exclusions = load_exclusions(exclude_file) if exclude_file else []
+
+    valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".bmp"}
+    all_files = sorted([p for p in originals_dir.iterdir() if p.suffix.lower() in valid_exts], key=lambda p: p.name)
+
+    passing_products = []
+    gate_records = []
+    skipped_count = 0
+
+    print(f"Gating {len(all_files)} originals with Shoot Coach...")
+
+    for img_p in all_files:
+        if any(img_p.name.startswith(ex) for ex in exclusions):
+            continue
+
+        try:
+            img = load_image(img_p)
+            report, seg = assess_with_segmentation(img, config=config)
+        except Exception as e:
+            gate_records.append({"filename": img_p.name, "ok": False, "tips": f"Error: {e}"})
+            skipped_count += 1
+            continue
+
+        tips_str = " | ".join(report.tips) if report.tips else ""
+        gate_records.append({
+            "filename": img_p.name,
+            "ok": report.ok,
+            "tips": tips_str,
+        })
+
+        if report.ok:
+            passing_products.append({
+                "path": img_p,
+                "filename": img_p.name,
+                "stem": img_p.stem,
+                "img": img,
+                "report": report,
+                "seg": seg,
+            })
+        else:
+            skipped_count += 1
+
+    if gate_csv_path:
+        gate_csv_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(gate_csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["filename", "ok", "tips"])
+            writer.writeheader()
+            writer.writerows(gate_records)
+        print(f"Coach gate complete: {len(passing_products)} passed, {skipped_count} skipped. Decisions saved to: {gate_csv_path}")
+
+    # Deduplicate by family
+    seen_families = set()
+    family_products: List[Tuple[Dict[str, Any], str]] = []
+    for prod in passing_products:
+        fam = extract_family(prod["filename"])
+        if fam not in seen_families:
+            seen_families.add(fam)
+            family_products.append((prod, fam))
+
+    print(f"Found {len(family_products)} unique product families among passing originals.")
+
+    chosen_items = pick_diverse_products(family_products, n_products)
+    selected_products = [item[0] for item in chosen_items]
+
+    print(f"\nChosen {len(chosen_items)} products across diverse families:")
+    for idx, (p_info, fam) in enumerate(chosen_items, start=1):
+        print(f"  {idx}. {p_info['filename']}  (family: '{fam}')")
+
+    return selected_products, gate_records
+
+
 def main():
     args = parse_args()
     out_dir = Path(args.out)
@@ -211,79 +309,13 @@ def main():
         generator = BackgroundGenerator(config=gen_config)
 
     # 1. Product selection via Coach gate
-    coach_config = CoachConfig()
-    exclude_file = Path("configs/coach_eval_exclude.txt")
-    exclusions = load_exclusions(exclude_file)
-
-    valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".bmp"}
-    all_files = sorted([p for p in originals_dir.iterdir() if p.suffix.lower() in valid_exts], key=lambda p: p.name)
-
-    passing_products = []
-    gate_records = []
-    skipped_count = 0
-
-    print(f"Gating {len(all_files)} originals with Shoot Coach...")
-
-    for img_p in all_files:
-        # Check exclusion prefix
-        if any(img_p.name.startswith(ex) for ex in exclusions):
-            continue
-
-        try:
-            img = load_image(img_p)
-            report, seg = assess_with_segmentation(img, config=coach_config)
-        except Exception as e:
-            gate_records.append({"filename": img_p.name, "ok": False, "tips": f"Error: {e}"})
-            skipped_count += 1
-            continue
-
-        tips_str = " | ".join(report.tips) if report.tips else ""
-        gate_records.append({
-            "filename": img_p.name,
-            "ok": report.ok,
-            "tips": tips_str,
-        })
-
-        if report.ok:
-            passing_products.append({
-                "path": img_p,
-                "filename": img_p.name,
-                "stem": img_p.stem,
-                "img": img,
-                "report": report,
-                "seg": seg,
-            })
-        else:
-            skipped_count += 1
-
-    # Save coach gate decisions
-    gate_csv_path = out_dir / "coach_gate.csv"
-    with open(gate_csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["filename", "ok", "tips"])
-        writer.writeheader()
-        writer.writerows(gate_records)
-
-    print(f"Coach gate complete: {len(passing_products)} passed, {skipped_count} skipped. Decisions saved to: {gate_csv_path}")
-
-    # Deduplicate by family (keeping first of each family in sorted order)
-    seen_families = set()
-    family_products: List[Tuple[Dict, str]] = []
-    for prod in passing_products:
-        fam = extract_family(prod["filename"])
-        if fam not in seen_families:
-            seen_families.add(fam)
-            family_products.append((prod, fam))
-
-    print(f"Found {len(family_products)} unique product families among passing originals.")
-
-    # Pick n-products evenly spaced
-    chosen_items = pick_diverse_products(family_products, args.n_products)
-    selected_products = [item[0] for item in chosen_items]
-
-    # Print chosen filenames and family names before generating
-    print(f"\nChosen {len(chosen_items)} products across diverse families:")
-    for idx, (p_info, fam) in enumerate(chosen_items, start=1):
-        print(f"  {idx}. {p_info['filename']}  (family: '{fam}')")
+    selected_products, gate_records = select_diverse_products(
+        originals_dir=originals_dir,
+        n_products=args.n_products,
+        coach_config=CoachConfig(),
+        exclude_file=Path("configs/coach_eval_exclude.txt"),
+        gate_csv_path=out_dir / "coach_gate.csv",
+    )
 
     # 2. Generation per product, scene, and seed
     white_dir = out_dir / "white"
@@ -308,6 +340,7 @@ def main():
             "controlnet_scale",
             "fill",
             "lora",
+            "scale",
         ],
     )
     if not manifest_exists:
@@ -350,6 +383,7 @@ def main():
                     gen_config=gen_config,
                     fill=args.fill,
                     controlnet_scale=args.controlnet_scale,
+                    lora_scale=args.lora_scale,
                 )
                 elapsed = time.time() - t0
 
@@ -370,6 +404,7 @@ def main():
                     "controlnet_scale": res.controlnet_scale,
                     "fill": res.fill,
                     "lora": args.lora or "",
+                    "scale": res.scale,
                 }
                 manifest_writer.writerow(manifest_row)
                 manifest_file.flush()

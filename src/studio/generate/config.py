@@ -88,8 +88,58 @@ class GenConfig:
     controlnet_scale: float = 0.5
     eta: float = 1.0
     lora_path: Optional[str] = None
-    lora_scale: float = 0.8
+    lora_scale: Optional[float] = None
     erode_px: int = 6
+
+
+def _find_lora_scales_file(path: Union[str, Path] = "configs/lora_scales.yaml") -> Path:
+    """Locate lora_scales.yaml configuration file."""
+    p = Path(path)
+    if p.exists():
+        return p
+    repo_p = Path(__file__).resolve().parents[3] / "configs" / "lora_scales.yaml"
+    if repo_p.exists():
+        return repo_p
+    return p
+
+
+def load_lora_scales(path: Union[str, Path] = "configs/lora_scales.yaml") -> Dict[str, float]:
+    """Load per-scene LoRA scale mapping from configs/lora_scales.yaml."""
+    resolved_path = _find_lora_scales_file(path)
+    if not resolved_path.exists():
+        return {
+            "diwali": 0.8,
+            "raksha_bandhan": 0.8,
+            "holi": 0.0,
+            "wedding": 0.8,
+            "indian_home": 0.8,
+        }
+    with open(resolved_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    return {str(k): float(v) for k, v in data.items() if isinstance(v, (int, float))}
+
+
+def effective_lora_scale(
+    scene: str,
+    override: Optional[float] = None,
+    scales_path: Union[str, Path] = "configs/lora_scales.yaml",
+) -> float:
+    """Determine the effective LoRA scale for a given scene.
+
+    Args:
+        scene: Scene name (e.g. 'diwali', 'holi', 'minimal').
+        override: Optional global override for LoRA scale across all scenes.
+        scales_path: Path to lora_scales.yaml.
+
+    Returns:
+        Effective float scale. If override is specified, returns override.
+        Otherwise looks up scene in lora_scales.yaml. If scene is unknown, returns 0.0.
+    """
+    if override is not None:
+        return float(override)
+
+    scales = load_lora_scales(scales_path)
+    return float(scales.get(scene, 0.0))
 
 
 def _find_lora_themes_file(path: Union[str, Path] = "configs/lora_themes.yaml") -> Path:
@@ -117,17 +167,24 @@ def load_theme_triggers(path: Union[str, Path] = "configs/lora_themes.yaml") -> 
     return triggers
 
 
-def apply_trigger(scene: str, prompt: str, lora_used: bool = True) -> str:
-    """Prepend the theme trigger to the scene prompt when LoRA is used.
+def apply_trigger(
+    scene: str,
+    prompt: str,
+    lora_used: bool = True,
+    scale: Optional[float] = None,
+) -> str:
+    """Prepend the theme trigger to the scene prompt when LoRA is used and scale > 0.
 
     Loads the trigger per theme from configs/lora_themes.yaml.
     The theme names equal the scene names diwali, raksha_bandhan, holi,
     wedding, and indian_home. 'minimal' and 'white' get no trigger.
+    Trigger is added only when the effective scale for that scene is > 0.
 
     Args:
         scene: Scene name (e.g. 'diwali', 'minimal', 'white').
         prompt: Scene prompt string.
         lora_used: Boolean indicating if LoRA is used in generation.
+        scale: Optional explicit scale. If None, effective_lora_scale(scene) is used.
 
     Returns:
         Prompt with trigger prepended if applicable, otherwise original prompt.
@@ -136,6 +193,10 @@ def apply_trigger(scene: str, prompt: str, lora_used: bool = True) -> str:
         return prompt
 
     if scene in ("minimal", "white"):
+        return prompt
+
+    eff_scale = effective_lora_scale(scene) if scale is None else float(scale)
+    if eff_scale <= 0.0:
         return prompt
 
     triggers = load_theme_triggers()
