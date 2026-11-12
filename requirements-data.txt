@@ -2,3 +2,6 @@ ultralytics
 imagehash
 torch
 transformers
+scipy
+torchmetrics[image]
+torch-fidelity
