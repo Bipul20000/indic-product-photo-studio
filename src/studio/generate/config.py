@@ -89,7 +89,7 @@ class GenConfig:
     eta: float = 1.0
     lora_path: Optional[str] = None
     lora_scale: Optional[float] = None
-    erode_px: int = 6
+    erode_px: int = 2
 
 
 def _find_lora_scales_file(path: Union[str, Path] = "configs/lora_scales.yaml") -> Path:

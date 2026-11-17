@@ -19,8 +19,26 @@ def test_detect_product_category():
     assert cat == "decor"
     assert "decorative centerpiece" in clause
 
+    cat, clause = detect_product_category("electric steam iron")
+    assert cat == "appliance"
+    assert "flat polished wooden table" in clause
+
+    cat, clause = detect_product_category("wireless noise cancelling headphones")
+    assert cat == "electronics"
+
     cat, _ = detect_product_category("unbranded mystery item")
     assert cat == "general"
+
+
+def test_build_contextual_prompt_appliance_festive_isolation():
+    """Verify appliances in festive scenes isolate decorations to distant room background."""
+    raw = "Raksha Bandhan festive setting with colorful rakhis, {product}"
+    prompt = build_contextual_prompt("raksha_bandhan", raw, "clothes iron", catalog_grade=True)
+
+    assert "clothes iron" in prompt
+    assert "distant blurred room background" in prompt
+    assert "no decorations touching the item" in prompt
+    assert "clean flat polished surface" in prompt
 
 
 def test_build_contextual_prompt_injection():

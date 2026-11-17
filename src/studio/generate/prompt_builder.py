@@ -37,6 +37,21 @@ PRODUCT_CATEGORIES = {
         ["tea", "coffee", "sweet", "mithai", "snack", "spice", "chocolate", "dry fruit", "laddu"],
         "presented appetizingly on a clean gourmet serving surface",
     ),
+    "appliance": (
+        [
+            "iron", "steamer", "microwave", "toaster", "blender", "mixer", "grinder",
+            "cooker", "dryer", "fan", "heater", "vacuum", "appliance", "hair dryer",
+            "kettle", "purifier", "trimmer",
+        ],
+        "standing cleanly on a flat polished wooden table, with clear empty space around the product and no decorations touching it",
+    ),
+    "electronics": (
+        [
+            "phone", "mobile", "laptop", "tablet", "headphones", "earbuds", "speaker",
+            "gadget", "watch", "smartwatch", "camera", "charger", "powerbank", "keyboard", "mouse",
+        ],
+        "resting cleanly on a sleek modern surface, with clean minimal space around the item",
+    ),
 }
 
 
@@ -53,8 +68,12 @@ def detect_product_category(product_name: str) -> Tuple[str, str]:
     words = set(re.findall(r"\b\w+\b", p_lower))
 
     for cat_name, (keywords, placement_clause) in PRODUCT_CATEGORIES.items():
-        if any(kw in words or kw in p_lower for kw in keywords):
-            return cat_name, placement_clause
+        for kw in keywords:
+            if " " in kw:
+                if re.search(r"\b" + re.escape(kw) + r"\b", p_lower):
+                    return cat_name, placement_clause
+            elif kw in words:
+                return cat_name, placement_clause
 
     return "general", "resting stably on a clean surface with natural contact lighting"
 
@@ -79,19 +98,35 @@ def build_contextual_prompt(
     if scene == "white":
         return "pure white background, clean commercial studio lighting"
 
-    # 1. Clean product title
+    # 1. Clean product title and category
     prod_clean = product_name.strip() if product_name and product_name.strip() else ""
+    cat_name = "general"
     if prod_clean:
-        _, placement = detect_product_category(prod_clean)
+        cat_name, placement = detect_product_category(prod_clean)
         prod_clause = f"a {prod_clean} {placement}"
     else:
         prod_clause = "the product standing stably on the surface"
 
-    # 2. Insert into template
-    if "{product}" in raw_prompt_template:
-        prompt = raw_prompt_template.replace("{product}", prod_clause)
+    # 2. Category-Specific Scene Adaptation (e.g. Appliances / Electronics in Festive Scenes)
+    if cat_name in ("appliance", "electronics") and scene in ("raksha_bandhan", "diwali", "wedding"):
+        # For utility appliances, restrict festival elements strictly to distant room ambiance
+        scene_ambiance = {
+            "raksha_bandhan": "warm Raksha Bandhan festive lights and sweets placed neatly on a table in the distant blurred room background",
+            "diwali": "warm glowing Diwali diyas and festive fairy lights softly blurred in the distant background room",
+            "wedding": "luxurious Indian wedding lighting and floral decor softly blurred in the distant background room",
+        }.get(scene, "festive warm background lights")
+
+        prompt = (
+            f"professional commercial product photo of a modern {prod_clean} standing on a clean flat polished surface, "
+            f"with {scene_ambiance}, clean empty tabletop around the product, no decorations touching the item, "
+            f"sharp product focus, 8k"
+        )
     else:
-        prompt = f"professional product photo of {prod_clause}, {raw_prompt_template}"
+        # Standard insertion into template
+        if "{product}" in raw_prompt_template:
+            prompt = raw_prompt_template.replace("{product}", prod_clause)
+        else:
+            prompt = f"professional product photo of {prod_clause}, {raw_prompt_template}"
 
     # 3. Append catalog-grade photographic grounding cues if enabled
     if catalog_grade:

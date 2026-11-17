@@ -97,6 +97,13 @@ def run_pipeline(
         scale_override = gen_config.lora_scale
     effective_scale = effective_lora_scale(scene, override=scale_override) if lora_used else 0.0
 
+    # For modern appliances & electronics, clamp LoRA scale to prevent cultural decoration bleeding onto the item
+    if product_name and lora_used:
+        from studio.generate.prompt_builder import detect_product_category
+        cat_detected, _ = detect_product_category(product_name)
+        if cat_detected in ("appliance", "electronics"):
+            effective_scale = min(effective_scale, 0.25)
+
     if isinstance(image_path, (str, Path)):
         img_bgr = load_image(image_path)
     else:

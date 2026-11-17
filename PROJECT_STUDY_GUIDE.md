@@ -759,13 +759,25 @@ flowchart TD
 
 ### 11.2 Product-Aware Dynamic Contextual Prompting (`src/studio/generate/prompt_builder.py`)
 
-The prompt engine analyzes the product name and automatically categorizes it into functional commercial domains (`drinkware`, `footwear`, `cosmetics`, `jewelry`, `decor`, `apparel`, `food`, `general`):
+The prompt engine analyzes the product name and automatically categorizes it into functional commercial domains (`drinkware`, `footwear`, `cosmetics`, `jewelry`, `decor`, `apparel`, `food`, `appliance`, `electronics`, `general`):
 
 - **Category-Aware Placement Clauses**:
   - *Drinkware* (mugs, cups, bottles): `"standing stably on the surface with subtle base reflections"`
   - *Footwear* (shoes, juttis, sneakers): `"resting naturally on a clean ground surface with realistic floor contact"`
   - *Decor* (diyas, idols, statues): `"displayed proudly as a decorative centerpiece on a polished surface"`
   - *Cosmetics* (serums, lotions, perfumes): `"standing elegantly on a pristine surface with soft commercial studio reflections"`
+  - *Appliances & Electronics* (irons, kettles, phones, headphones): `"standing cleanly on a flat polished wooden table, with clear empty space around the product and no decorations touching it"`
+- **Appliance / Modern Utility Isolation**:
+  When modern utility products (like an electric iron or smartphone) are requested in traditional festive scenes (e.g. `raksha_bandhan`, `diwali`), the engine automatically routes festive elements into **distant room ambiance** rather than generating embroidery, lace, or garlands attached to the gadget:
+  ```text
+  "commercial product photo of a modern clothes iron standing on a clean flat polished surface, with warm Raksha Bandhan festive lights and sweets placed neatly on a table in the distant blurred room background, clean empty tabletop around the product, no decorations touching the item, sharp product focus, 8k"
+  ```
+- **Mask Erosion Boundary Clamping (`erode_px: 2`)**:
+  Reduced inpainting mask erosion from 6px to 2px, preventing the diffusion inpainter from bleeding 6 pixels into the product contour and hallucinating decorative borders directly onto the item.
+- **Appliance LoRA Scale Clamping**:
+  When utility appliances are detected, the cultural LoRA scale is automatically clamped to $\le 0.25$, preventing traditional thali and textile embroidery patterns from overpowering modern manufactured goods.
+- **Hardened Negative Prompts**:
+  Added explicit negative tokens banning attached decorations: `border around product, decorations attached to product, lace around product, fabric wrapped around product, garland on product, beads attached to product, clothing on product, wreath, ribbon on product`.
 - **Commercial Catalog Grounding Modifiers**:
   Appends high-end photographic modifiers: `", commercial e-commerce catalog aesthetic, natural contact shadows, subtle ambient light reflections on surface, sharp focus on product"`.
 
@@ -883,7 +895,7 @@ indic-product-photo-studio/
 ├── app/
 │   ├── app.py                   # Main Gradio studio web application (with Catalog Pack)
 │   └── blind_test.py            # Double-blind A/B evaluation web application
-├── tests/                       # Complete pytest suite (92 unit & integration tests)
+├── tests/                       # Complete pytest suite (93 unit & integration tests)
 ├── kaggle_context.md            # Experimental log and execution trace from Kaggle T4
 └── PROJECT_STUDY_GUIDE.md       # This comprehensive project blueprint
 ```
@@ -896,7 +908,7 @@ indic-product-photo-studio/
 ```bash
 pytest
 ```
-*Executes all 92 unit and integration tests in ~35 seconds without requiring a GPU or network.*
+*Executes all 93 unit and integration tests in ~35 seconds without requiring a GPU or network.*
 
 #### 2. Launch the Gradio Studio Web App Locally (Demo CPU Mode)
 ```bash
