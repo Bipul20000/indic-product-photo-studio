@@ -5,12 +5,13 @@ and marketplace background generation with Shoot Coach gating.
 """
 
 import argparse
+import random
 from typing import Any, Optional
 
 import gradio as gr
 import torch
 
-from studio.app_logic import check_photo, generate_all, generate_one
+from studio.app_logic import check_photo, generate_all, generate_catalog_pack, generate_one
 from studio.compose.compose import PRESETS
 
 
@@ -52,12 +53,19 @@ def build_app(
         gr.Markdown("Upload a phone photo of your product, get a marketplace-ready image in a festive Indian scene.")
 
         if is_demo_mode:
-            gr.Markdown("### ⚠️ Demo mode: no GPU, backgrounds are plain gradients")
+            gr.Markdown("### ⚠️ Demo mode: no GPU detected, generating fast preview gradients")
+        else:
+            gr.Markdown("### 🚀 GPU Active: ControlNet Inpainting + Indic Festive LoRA enabled")
 
         with gr.Row():
             # Left column: Inputs
             with gr.Column(scale=1):
                 image_input = gr.Image(type="filepath", label="Upload Product Photo")
+                product_name_input = gr.Textbox(
+                    value="",
+                    label="Product Name / Category (Recommended for Context)",
+                    placeholder="e.g. ceramic coffee mug, terracotta diya, leather sandals, face serum",
+                )
                 scene_input = gr.Dropdown(
                     choices=["white", "diwali", "raksha_bandhan", "holi", "wedding", "indian_home", "minimal"],
                     value="diwali",
@@ -68,33 +76,38 @@ def build_app(
                     value=default_preset if default_preset in PRESETS else "square_1000",
                     label="Marketplace / Preset",
                 )
-                product_name_input = gr.Textbox(
-                    value="",
-                    label="Product Name (Optional)",
-                    placeholder="e.g. ceramic mug, brass diya, leather bag",
-                )
-                seed_input = gr.Number(value=0, precision=0, label="Seed")
-                force_input = gr.Checkbox(
-                    value=False,
-                    label="Generate even if Shoot Coach says retake",
-                )
+                with gr.Row():
+                    seed_input = gr.Number(value=0, precision=0, label="Seed")
+                    randomize_seed_input = gr.Checkbox(value=False, label="🎲 New seed each run")
 
                 with gr.Row():
-                    btn_check = gr.Button("Check my photo", variant="secondary")
-                    btn_generate = gr.Button("Generate", variant="primary")
-                btn_generate_all = gr.Button("Generate all scenes", variant="secondary")
+                    harmonize_input = gr.Checkbox(value=True, label="✨ Ambient Relighting & Edge Light Bounce")
+                    force_input = gr.Checkbox(value=False, label="Force generate if Coach flags retake")
+
+                with gr.Row():
+                    btn_check = gr.Button("🔍 Check my photo", variant="secondary")
+                    btn_generate = gr.Button("⚡ Generate Single Scene", variant="primary")
+                with gr.Row():
+                    btn_catalog_pack = gr.Button("📦 Generate E-Commerce Catalog Pack (4 Images)", variant="primary")
+                    btn_generate_all = gr.Button("🌐 Generate All 6 Scenes", variant="secondary")
 
             # Right column: Outputs
             with gr.Column(scale=1):
                 status_output = gr.Textbox(label="Coach Status", interactive=False)
-                tips_output = gr.Textbox(label="Coach Tips", lines=3, interactive=False)
+                tips_output = gr.Textbox(label="Coach Tips", lines=2, interactive=False)
                 gen_info_output = gr.Textbox(label="Seconds Taken", interactive=False)
 
                 image_output = gr.Image(
                     type="numpy",
-                    label="Generated Image",
+                    label="Single Scene Output",
                     interactive=False,
                     format="png",
+                )
+                catalog_gallery_output = gr.Gallery(
+                    label="E-Commerce Catalog Suite (Hero, Festive, Lifestyle, Minimal)",
+                    show_label=True,
+                    columns=4,
+                    height="auto",
                 )
                 gallery_output = gr.Gallery(
                     label="All Scenes Gallery",
@@ -103,7 +116,7 @@ def build_app(
                     height="auto",
                 )
 
-                with gr.Accordion("Coach Quality Checks & Product Mask", open=True):
+                with gr.Accordion("Coach Quality Checks & Product Mask", open=False):
                     checks_table_output = gr.Dataframe(
                         headers=["check", "passed", "value"],
                         label="Quality Checks",
@@ -123,36 +136,63 @@ def build_app(
             except Exception as exc:
                 return "ERROR", f"Error checking photo: {exc}", [], None
 
-        def on_generate(image_path, scene, marketplace, product_name, seed, force_retake):
+        def on_generate(image_path, scene, marketplace, product_name, seed, randomize_seed, harmonize, force_retake):
             try:
+                eff_seed = random.randint(0, 999999) if randomize_seed else int(seed)
                 gen = get_generator()
                 res = generate_one(
                     image_path=image_path,
                     scene=scene,
                     marketplace=marketplace,
                     product_name=product_name,
-                    seed=seed,
+                    seed=eff_seed,
                     force_retake=force_retake,
                     generator=gen,
+                    harmonize=harmonize,
+                    realistic_shadow=True,
                 )
-                sec_text = f"{res.seconds:.2f}s" if res.seconds > 0 else ""
+                sec_text = f"{res.seconds:.2f}s (Seed: {eff_seed})" if res.seconds > 0 else ""
                 return res.image, res.verdict, res.tips, sec_text
             except Exception as exc:
                 return None, "ERROR", f"Error during generation: {exc}", ""
 
-        def on_generate_all(image_path, marketplace, product_name, seed, force_retake, progress=gr.Progress()):
+        def on_catalog_pack(image_path, scene, marketplace, product_name, seed, randomize_seed, harmonize, force_retake, progress=gr.Progress()):
             try:
+                eff_seed = random.randint(0, 999999) if randomize_seed else int(seed)
+                gen = get_generator()
+                res = generate_catalog_pack(
+                    image_path=image_path,
+                    marketplace=marketplace,
+                    product_name=product_name,
+                    seed=eff_seed,
+                    force_retake=force_retake,
+                    festive_scene=scene if scene not in ("white", "minimal") else "diwali",
+                    generator=gen,
+                    progress=progress,
+                    harmonize=harmonize,
+                    realistic_shadow=True,
+                )
+                sec_text = f"Pack Total: {res.seconds:.2f}s (Seed: {eff_seed})" if res.seconds > 0 else ""
+                return res.pack, res.verdict, res.tips, sec_text
+            except Exception as exc:
+                return [], "ERROR", f"Error generating catalog pack: {exc}", ""
+
+        def on_generate_all(image_path, marketplace, product_name, seed, randomize_seed, harmonize, force_retake, progress=gr.Progress()):
+            try:
+                eff_seed = random.randint(0, 999999) if randomize_seed else int(seed)
                 gen = get_generator()
                 res = generate_all(
                     image_path=image_path,
                     marketplace=marketplace,
                     product_name=product_name,
-                    seed=seed,
+                    seed=eff_seed,
                     force_retake=force_retake,
                     generator=gen,
                     progress=progress,
+                    harmonize=harmonize,
+                    realistic_shadow=True,
                 )
-                sec_text = f"Total: {res.seconds:.2f}s" if res.seconds > 0 else ""
+                sec_text = f"Total: {res.seconds:.2f}s (Seed: {eff_seed})" if res.seconds > 0 else ""
                 return res.gallery, res.verdict, res.tips, sec_text
             except Exception as exc:
                 return [], "ERROR", f"Error generating all scenes: {exc}", ""
@@ -165,13 +205,19 @@ def build_app(
 
         btn_generate.click(
             fn=on_generate,
-            inputs=[image_input, scene_input, marketplace_input, product_name_input, seed_input, force_input],
+            inputs=[image_input, scene_input, marketplace_input, product_name_input, seed_input, randomize_seed_input, harmonize_input, force_input],
             outputs=[image_output, status_output, tips_output, gen_info_output],
+        )
+
+        btn_catalog_pack.click(
+            fn=on_catalog_pack,
+            inputs=[image_input, scene_input, marketplace_input, product_name_input, seed_input, randomize_seed_input, harmonize_input, force_input],
+            outputs=[catalog_gallery_output, status_output, tips_output, gen_info_output],
         )
 
         btn_generate_all.click(
             fn=on_generate_all,
-            inputs=[image_input, marketplace_input, product_name_input, seed_input, force_input],
+            inputs=[image_input, marketplace_input, product_name_input, seed_input, randomize_seed_input, harmonize_input, force_input],
             outputs=[gallery_output, status_output, tips_output, gen_info_output],
         )
 

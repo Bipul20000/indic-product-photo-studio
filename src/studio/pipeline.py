@@ -13,6 +13,7 @@ from studio.compose.compose import _resolve_preset, composite, place_product
 from studio.generate.backgrounds import BackgroundGenerator, FakeBackgroundGenerator
 from studio.generate.config import GenConfig, apply_trigger, effective_lora_scale, load_scenes
 from studio.generate.prep import build_inpaint_inputs, gen_size
+from studio.generate.prompt_builder import build_contextual_prompt
 from studio.segment.segmenter import SegmentResult
 from studio.vision.people import contains_person
 
@@ -50,6 +51,8 @@ def run_pipeline(
     fill: Optional[float] = None,
     controlnet_scale: Optional[float] = None,
     lora_scale: Optional[float] = None,
+    harmonize: bool = True,
+    realistic_shadow: bool = True,
 ) -> PipelineResult:
     """Run the photo studio generation pipeline for white background or AI scenes.
 
@@ -148,7 +151,15 @@ def run_pipeline(
 
     if scene == "white":
         bg = np.full((canvas_h, canvas_w, 3), 255, dtype=np.uint8)
-        out_image = composite(bg, canvas_rgba, canvas_mask, shadow=True, opacity=0.30)
+        out_image = composite(
+            bg,
+            canvas_rgba,
+            canvas_mask,
+            shadow=True,
+            opacity=0.30,
+            realistic_shadow=realistic_shadow,
+            harmonize=False,
+        )
         elapsed = time.time() - start_time
         return PipelineResult(
             ok=report.ok,
@@ -179,15 +190,19 @@ def run_pipeline(
         erode_px=g_cfg.erode_px,
     )
 
-    # Format scene prompt
+    # Format scene prompt with product-aware contextual grounding
     scenes_data = load_scenes()
     scenes_dict = scenes_data.get("scenes", {})
     if scene not in scenes_dict:
         raise ValueError(f"Unknown scene '{scene}'. Available scenes: {list(scenes_dict.keys())}")
 
-    prod_str = product_name.strip() if product_name and product_name.strip() else "the product"
     raw_prompt = scenes_dict[scene]["prompt"]
-    prompt = raw_prompt.replace("{product}", prod_str)
+    prompt = build_contextual_prompt(
+        scene=scene,
+        raw_prompt_template=raw_prompt,
+        product_name=product_name,
+        catalog_grade=True,
+    )
     negative = scenes_data.get("negative", "")
 
     # Lazy-load generator if not provided
@@ -238,13 +253,15 @@ def run_pipeline(
     # Upscale generated background to preset size using bicubic interpolation
     bg_upscaled = cv2.resize(gen_bgr_small, (canvas_w, canvas_h), interpolation=cv2.INTER_CUBIC)
 
-    # Composite original product pixels over generated background with soft shadow at opacity 0.25
+    # Composite product pixels over generated background with contact shadow and ambient harmonization
     out_image = composite(
         background_bgr=bg_upscaled,
         rgba_on_canvas=canvas_rgba,
         mask=canvas_mask,
         shadow=True,
         opacity=0.25,
+        harmonize=harmonize,
+        realistic_shadow=realistic_shadow,
     )
 
     elapsed = time.time() - start_time

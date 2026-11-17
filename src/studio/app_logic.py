@@ -111,6 +111,31 @@ class GenerateAllResult(tuple):
         return super().__getitem__(key)
 
 
+class GenerateCatalogPackResult(tuple):
+    """Result from generating a 4-asset e-commerce catalog pack."""
+
+    def __new__(cls, pack: List[Tuple[np.ndarray, str]], verdict: str, tips: str, seconds: float):
+        return super().__new__(cls, (pack, verdict, tips, seconds))
+
+    def __init__(self, pack: List[Tuple[np.ndarray, str]], verdict: str, tips: str, seconds: float):
+        self.pack = pack
+        self.verdict = verdict
+        self.tips = tips
+        self.seconds = seconds
+
+    def __getitem__(self, key: Union[str, int]) -> Any:
+        if isinstance(key, str):
+            mapping = {
+                "pack": self.pack,
+                "verdict": self.verdict,
+                "tips": self.tips,
+                "seconds": self.seconds,
+            }
+            if key in mapping:
+                return mapping[key]
+        return super().__getitem__(key)
+
+
 def check_photo(
     image_path: Union[str, Path, np.ndarray, None],
     config: Optional[CoachConfig] = None,
@@ -181,6 +206,8 @@ def generate_one(
     generator: Optional[Any] = None,
     gen_config: Optional[GenConfig] = None,
     config: Optional[CoachConfig] = None,
+    harmonize: bool = True,
+    realistic_shadow: bool = True,
 ) -> GenerateOneResult:
     """Run generation pipeline for a single scene with Shoot Coach gating.
 
@@ -224,6 +251,8 @@ def generate_one(
             generator=generator,
             gen_config=gen_config,
             config=config,
+            harmonize=harmonize,
+            realistic_shadow=realistic_shadow,
         )
 
         verdict = "OK" if (res.report and res.report.ok) else "RETAKE"
@@ -249,6 +278,8 @@ def generate_all(
     config: Optional[CoachConfig] = None,
     scenes: Optional[List[str]] = None,
     progress: Optional[Callable[[float, str], None]] = None,
+    harmonize: bool = True,
+    realistic_shadow: bool = True,
 ) -> GenerateAllResult:
     """Generate all generative scenes for the uploaded photo with the same seed.
 
@@ -263,13 +294,11 @@ def generate_all(
         config: Optional CoachConfig.
         scenes: List of scene names (defaults to REQUIRED_SCENES).
         progress: Optional callable progress(fraction, desc=...) from gr.Progress().
+        harmonize: If True, applies ambient color and rim light harmonization.
+        realistic_shadow: If True, applies realistic contact and ambient shadows.
 
     Returns:
-        GenerateAllResult containing:
-            gallery: List of (RGB numpy array, scene_name) tuples.
-            verdict: 'OK' or 'RETAKE'
-            tips: Coach tips if retake
-            seconds: Total seconds taken across scenes
+        GenerateAllResult containing gallery, verdict, tips, seconds.
     """
     try:
         if image_path is None:
@@ -308,6 +337,8 @@ def generate_all(
                 generator=generator,
                 gen_config=gen_config,
                 config=config,
+                harmonize=harmonize,
+                realistic_shadow=realistic_shadow,
             )
             total_seconds += res.seconds
             last_report = res.report
@@ -332,3 +363,118 @@ def generate_all(
         return GenerateAllResult(gallery, verdict, tips, round(total_seconds, 3))
     except Exception as exc:
         return GenerateAllResult([], "ERROR", f"Error generating scenes: {exc}", 0.0)
+
+
+CATALOG_PACK_DEFS = [
+    ("white", "Primary Hero (Marketplace Compliant)"),
+    ("diwali", "Festive Campaign Hero"),
+    ("indian_home", "Lifestyle Interior Context"),
+    ("minimal", "Contemporary Minimal Studio"),
+]
+
+
+def generate_catalog_pack(
+    image_path: Union[str, Path, np.ndarray, None],
+    marketplace: str = "square_1000",
+    product_name: Optional[str] = None,
+    seed: int = 0,
+    force_retake: bool = False,
+    festive_scene: str = "diwali",
+    generator: Optional[Any] = None,
+    gen_config: Optional[GenConfig] = None,
+    config: Optional[CoachConfig] = None,
+    progress: Optional[Callable[[float, str], None]] = None,
+    harmonize: bool = True,
+    realistic_shadow: bool = True,
+) -> GenerateCatalogPackResult:
+    """Generate a curated 4-image e-commerce catalog suite for a product listing.
+
+    Builds:
+    1. Primary Hero: Pure white (#FFFFFF) background with realistic contact shadow.
+    2. Festive Hero: Cultural festive campaign setting (e.g. Diwali, Wedding).
+    3. Lifestyle Context: Authentic Indian home interior with warm natural lighting.
+    4. Minimal Studio: Modern clean minimalist studio aesthetic.
+
+    Args:
+        image_path: Path to the image file or BGR numpy array.
+        marketplace: Preset name from compose.PRESETS.
+        product_name: Optional product title for contextual prompt generation.
+        seed: Random seed for generation.
+        force_retake: If True, generate even if Shoot Coach says retake.
+        festive_scene: Festive scene choice for slot 2 (default 'diwali').
+        generator: Generator instance.
+        gen_config: Optional GenConfig.
+        config: Optional CoachConfig.
+        progress: Optional callable progress(fraction, desc=...) from gr.Progress().
+        harmonize: If True, applies ambient color and rim light harmonization.
+        realistic_shadow: If True, applies realistic contact and ambient shadows.
+
+    Returns:
+        GenerateCatalogPackResult containing pack gallery, verdict, tips, total seconds.
+    """
+    try:
+        if image_path is None:
+            return GenerateCatalogPackResult([], "ERROR", "Please upload an image first.", 0.0)
+
+        if isinstance(image_path, (str, Path)):
+            p = Path(image_path)
+            if not p.exists() or not p.is_file():
+                return GenerateCatalogPackResult([], "ERROR", f"Image file not found: {image_path}", 0.0)
+
+        pack_scenes = [
+            ("white", "1. Primary Hero (Marketplace Compliant)"),
+            (festive_scene if festive_scene in REQUIRED_SCENES else "diwali", f"2. Festive Campaign ({festive_scene.title()})"),
+            ("indian_home", "3. Lifestyle Interior Context"),
+            ("minimal", "4. Contemporary Minimal Studio"),
+        ]
+
+        if generator is None:
+            generator = FakeBackgroundGenerator(config=gen_config)
+
+        total_seconds = 0.0
+        pack_gallery: List[Tuple[np.ndarray, str]] = []
+        last_report = None
+        total_items = len(pack_scenes)
+
+        for idx, (sc, label) in enumerate(pack_scenes):
+            if progress is not None:
+                try:
+                    progress(idx / total_items, desc=f"Generating catalog asset {idx+1}/{total_items}: {label}")
+                except Exception:
+                    pass
+
+            res = run_pipeline(
+                image_path=image_path,
+                scene=sc,
+                marketplace=marketplace,
+                force=force_retake,
+                product_name=product_name if product_name else None,
+                seed=int(seed),
+                generator=generator,
+                gen_config=gen_config,
+                config=config,
+                harmonize=harmonize,
+                realistic_shadow=realistic_shadow,
+            )
+            total_seconds += res.seconds
+            last_report = res.report
+
+            if res.image is None:
+                verdict = "RETAKE"
+                tips = "\n".join(res.report.tips) if (res.report and res.report.tips) else ""
+                return GenerateCatalogPackResult([], verdict, tips, round(total_seconds, 3))
+
+            img_rgb = cv2.cvtColor(res.image, cv2.COLOR_BGR2RGB)
+            pack_gallery.append((img_rgb, label))
+
+        if progress is not None:
+            try:
+                progress(1.0, desc="Catalog pack complete!")
+            except Exception:
+                pass
+
+        verdict = "OK" if (last_report and last_report.ok) else "RETAKE"
+        tips = "\n".join(last_report.tips) if (last_report and last_report.tips) else ""
+        return GenerateCatalogPackResult(pack_gallery, verdict, tips, round(total_seconds, 3))
+    except Exception as exc:
+        return GenerateCatalogPackResult([], "ERROR", f"Error generating catalog pack: {exc}", 0.0)

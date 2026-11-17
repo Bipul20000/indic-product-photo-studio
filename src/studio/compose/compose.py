@@ -5,6 +5,8 @@ import numpy as np
 
 from studio.coach.coach import CoachReport, assess_with_segmentation
 from studio.coach.config import CoachConfig
+from studio.compose.harmonize import harmonize_product
+from studio.compose.shadow import add_realistic_shadow
 from studio.segment.segmenter import SegmentResult
 
 PRESETS: Dict[str, Tuple[int, int]] = {
@@ -153,17 +155,25 @@ def composite(
     opacity: float = 0.30,
     blur_sigma: float = 18.0,
     offset_y: int = 12,
+    harmonize: bool = False,
+    harmonize_strength: float = 0.12,
+    rim_strength: float = 0.28,
+    realistic_shadow: bool = False,
 ) -> np.ndarray:
-    """Composite original product pixels over background using feathered alpha and optional drop shadow.
+    """Composite product pixels over background using feathered alpha and shadow.
 
     Args:
         background_bgr: Canvas background in BGR format.
         rgba_on_canvas: Placed product RGBA on canvas.
         mask: Optional binary product mask on canvas (derived from alpha if omitted).
-        shadow: Whether to generate and apply soft drop shadow under product.
+        shadow: Whether to generate and apply drop shadow under product.
         opacity: Shadow opacity (default 0.30).
         blur_sigma: Shadow blur sigma (default 18.0).
         offset_y: Shadow downward offset (default 12).
+        harmonize: If True, applies ambient color and rim light harmonization.
+        harmonize_strength: Strength of ambient color temperature shift (default 0.12).
+        rim_strength: Intensity of ambient rim light bounce (default 0.28).
+        realistic_shadow: If True, applies dual-layer contact and diffuse shadow.
 
     Returns:
         Final composited image in BGR format.
@@ -177,12 +187,32 @@ def composite(
     else:
         bg = background_bgr.copy()
 
-    if shadow:
-        shadow_mask = mask if mask is not None else (rgba_on_canvas[:, :, 3] >= 128).astype(np.uint8) * 255
-        bg = add_soft_shadow(bg, shadow_mask, opacity=opacity, blur_sigma=blur_sigma, offset_y=offset_y)
+    shadow_mask = mask if mask is not None else (rgba_on_canvas[:, :, 3] >= 128).astype(np.uint8) * 255
 
-    prod_bgr = rgba_on_canvas[:, :, :3].astype(np.float32)
-    alpha = (rgba_on_canvas[:, :, 3].astype(np.float32) / 255.0)[:, :, np.newaxis]
+    if shadow:
+        if realistic_shadow:
+            bg = add_realistic_shadow(
+                bg,
+                shadow_mask,
+                diffuse_opacity=opacity,
+                diffuse_blur_sigma=blur_sigma,
+                diffuse_offset_y=offset_y,
+            )
+        else:
+            bg = add_soft_shadow(bg, shadow_mask, opacity=opacity, blur_sigma=blur_sigma, offset_y=offset_y)
+
+    active_rgba = rgba_on_canvas
+    if harmonize:
+        active_rgba = harmonize_product(
+            rgba_on_canvas=rgba_on_canvas,
+            background_bgr=bg,
+            mask=shadow_mask,
+            strength=harmonize_strength,
+            rim_strength=rim_strength,
+        )
+
+    prod_bgr = active_rgba[:, :, :3].astype(np.float32)
+    alpha = (active_rgba[:, :, 3].astype(np.float32) / 255.0)[:, :, np.newaxis]
 
     out = prod_bgr * alpha + bg.astype(np.float32) * (1.0 - alpha)
     return np.clip(out, 0, 255).astype(np.uint8)

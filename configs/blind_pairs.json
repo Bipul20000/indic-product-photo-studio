@@ -1,0 +1,218 @@
+[
+  {
+    "pair_id": "pair_001",
+    "scene": "diwali",
+    "product": "Khalili_Collection_Islamic_Art_sci_283",
+    "seed": 1,
+    "base_path": "outputs/compare/base/diwali/Khalili_Collection_Islamic_Art_sci_283_s1.jpg",
+    "lora_path": "outputs/compare/lora/diwali/Khalili_Collection_Islamic_Art_sci_283_s1.jpg",
+    "pixel_diff": 23.123
+  },
+  {
+    "pair_id": "pair_002",
+    "scene": "diwali",
+    "product": "Heirloom_range_coffee_pot_and_mug_V_A_London",
+    "seed": 1,
+    "base_path": "outputs/compare/base/diwali/Heirloom_range_coffee_pot_and_mug_V_A_London_s1.jpg",
+    "lora_path": "outputs/compare/lora/diwali/Heirloom_range_coffee_pot_and_mug_V_A_London_s1.jpg",
+    "pixel_diff": 27.222
+  },
+  {
+    "pair_id": "pair_003",
+    "scene": "diwali",
+    "product": "Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02",
+    "seed": 0,
+    "base_path": "outputs/compare/base/diwali/Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02_s0.jpg",
+    "lora_path": "outputs/compare/lora/diwali/Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02_s0.jpg",
+    "pixel_diff": 20.633
+  },
+  {
+    "pair_id": "pair_004",
+    "scene": "diwali",
+    "product": "Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2",
+    "seed": 0,
+    "base_path": "outputs/compare/base/diwali/Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2_s0.jpg",
+    "lora_path": "outputs/compare/lora/diwali/Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2_s0.jpg",
+    "pixel_diff": 17.131
+  },
+  {
+    "pair_id": "pair_005",
+    "scene": "diwali",
+    "product": "Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2",
+    "seed": 1,
+    "base_path": "outputs/compare/base/diwali/Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2_s1.jpg",
+    "lora_path": "outputs/compare/lora/diwali/Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2_s1.jpg",
+    "pixel_diff": 24.453
+  },
+  {
+    "pair_id": "pair_006",
+    "scene": "diwali",
+    "product": "Khalili_Collection_Islamic_Art_sci_283",
+    "seed": 0,
+    "base_path": "outputs/compare/base/diwali/Khalili_Collection_Islamic_Art_sci_283_s0.jpg",
+    "lora_path": "outputs/compare/lora/diwali/Khalili_Collection_Islamic_Art_sci_283_s0.jpg",
+    "pixel_diff": 15.273
+  },
+  {
+    "pair_id": "pair_007",
+    "scene": "raksha_bandhan",
+    "product": "Heirloom_range_coffee_pot_and_mug_V_A_London",
+    "seed": 1,
+    "base_path": "outputs/compare/base/raksha_bandhan/Heirloom_range_coffee_pot_and_mug_V_A_London_s1.jpg",
+    "lora_path": "outputs/compare/lora/raksha_bandhan/Heirloom_range_coffee_pot_and_mug_V_A_London_s1.jpg",
+    "pixel_diff": 22.052
+  },
+  {
+    "pair_id": "pair_008",
+    "scene": "raksha_bandhan",
+    "product": "Khalili_Collection_Islamic_Art_sci_283",
+    "seed": 1,
+    "base_path": "outputs/compare/base/raksha_bandhan/Khalili_Collection_Islamic_Art_sci_283_s1.jpg",
+    "lora_path": "outputs/compare/lora/raksha_bandhan/Khalili_Collection_Islamic_Art_sci_283_s1.jpg",
+    "pixel_diff": 14.806
+  },
+  {
+    "pair_id": "pair_009",
+    "scene": "raksha_bandhan",
+    "product": "Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02",
+    "seed": 0,
+    "base_path": "outputs/compare/base/raksha_bandhan/Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02_s0.jpg",
+    "lora_path": "outputs/compare/lora/raksha_bandhan/Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02_s0.jpg",
+    "pixel_diff": 24.253
+  },
+  {
+    "pair_id": "pair_010",
+    "scene": "raksha_bandhan",
+    "product": "Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2",
+    "seed": 1,
+    "base_path": "outputs/compare/base/raksha_bandhan/Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2_s1.jpg",
+    "lora_path": "outputs/compare/lora/raksha_bandhan/Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2_s1.jpg",
+    "pixel_diff": 27.309
+  },
+  {
+    "pair_id": "pair_011",
+    "scene": "raksha_bandhan",
+    "product": "Waterbottle",
+    "seed": 0,
+    "base_path": "outputs/compare/base/raksha_bandhan/Waterbottle_s0.jpg",
+    "lora_path": "outputs/compare/lora/raksha_bandhan/Waterbottle_s0.jpg",
+    "pixel_diff": 27.784
+  },
+  {
+    "pair_id": "pair_012",
+    "scene": "raksha_bandhan",
+    "product": "Khalili_Collection_Islamic_Art_sci_283",
+    "seed": 0,
+    "base_path": "outputs/compare/base/raksha_bandhan/Khalili_Collection_Islamic_Art_sci_283_s0.jpg",
+    "lora_path": "outputs/compare/lora/raksha_bandhan/Khalili_Collection_Islamic_Art_sci_283_s0.jpg",
+    "pixel_diff": 16.0
+  },
+  {
+    "pair_id": "pair_013",
+    "scene": "wedding",
+    "product": "Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2",
+    "seed": 0,
+    "base_path": "outputs/compare/base/wedding/Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2_s0.jpg",
+    "lora_path": "outputs/compare/lora/wedding/Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2_s0.jpg",
+    "pixel_diff": 24.862
+  },
+  {
+    "pair_id": "pair_014",
+    "scene": "wedding",
+    "product": "Waterbottle",
+    "seed": 0,
+    "base_path": "outputs/compare/base/wedding/Waterbottle_s0.jpg",
+    "lora_path": "outputs/compare/lora/wedding/Waterbottle_s0.jpg",
+    "pixel_diff": 24.139
+  },
+  {
+    "pair_id": "pair_015",
+    "scene": "wedding",
+    "product": "Heirloom_range_coffee_pot_and_mug_V_A_London",
+    "seed": 1,
+    "base_path": "outputs/compare/base/wedding/Heirloom_range_coffee_pot_and_mug_V_A_London_s1.jpg",
+    "lora_path": "outputs/compare/lora/wedding/Heirloom_range_coffee_pot_and_mug_V_A_London_s1.jpg",
+    "pixel_diff": 28.425
+  },
+  {
+    "pair_id": "pair_016",
+    "scene": "wedding",
+    "product": "Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02",
+    "seed": 0,
+    "base_path": "outputs/compare/base/wedding/Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02_s0.jpg",
+    "lora_path": "outputs/compare/lora/wedding/Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02_s0.jpg",
+    "pixel_diff": 24.447
+  },
+  {
+    "pair_id": "pair_017",
+    "scene": "wedding",
+    "product": "Waterbottle",
+    "seed": 1,
+    "base_path": "outputs/compare/base/wedding/Waterbottle_s1.jpg",
+    "lora_path": "outputs/compare/lora/wedding/Waterbottle_s1.jpg",
+    "pixel_diff": 26.213
+  },
+  {
+    "pair_id": "pair_018",
+    "scene": "wedding",
+    "product": "2026.06.05_USSR_Milk_Glass_Table_Lamp_03",
+    "seed": 1,
+    "base_path": "outputs/compare/base/wedding/2026.06.05_USSR_Milk_Glass_Table_Lamp_03_s1.jpg",
+    "lora_path": "outputs/compare/lora/wedding/2026.06.05_USSR_Milk_Glass_Table_Lamp_03_s1.jpg",
+    "pixel_diff": 33.62
+  },
+  {
+    "pair_id": "pair_019",
+    "scene": "indian_home",
+    "product": "Waterbottle",
+    "seed": 1,
+    "base_path": "outputs/compare/base/indian_home/Waterbottle_s1.jpg",
+    "lora_path": "outputs/compare/lora/indian_home/Waterbottle_s1.jpg",
+    "pixel_diff": 28.45
+  },
+  {
+    "pair_id": "pair_020",
+    "scene": "indian_home",
+    "product": "Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2",
+    "seed": 0,
+    "base_path": "outputs/compare/base/indian_home/Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2_s0.jpg",
+    "lora_path": "outputs/compare/lora/indian_home/Paar_sneakers_Onitsuka_Tiger_objectnr_91283-1-2_s0.jpg",
+    "pixel_diff": 14.078
+  },
+  {
+    "pair_id": "pair_021",
+    "scene": "indian_home",
+    "product": "Khalili_Collection_Islamic_Art_sci_283",
+    "seed": 1,
+    "base_path": "outputs/compare/base/indian_home/Khalili_Collection_Islamic_Art_sci_283_s1.jpg",
+    "lora_path": "outputs/compare/lora/indian_home/Khalili_Collection_Islamic_Art_sci_283_s1.jpg",
+    "pixel_diff": 15.041
+  },
+  {
+    "pair_id": "pair_022",
+    "scene": "indian_home",
+    "product": "Heirloom_range_coffee_pot_and_mug_V_A_London",
+    "seed": 0,
+    "base_path": "outputs/compare/base/indian_home/Heirloom_range_coffee_pot_and_mug_V_A_London_s0.jpg",
+    "lora_path": "outputs/compare/lora/indian_home/Heirloom_range_coffee_pot_and_mug_V_A_London_s0.jpg",
+    "pixel_diff": 21.258
+  },
+  {
+    "pair_id": "pair_023",
+    "scene": "indian_home",
+    "product": "Waterbottle",
+    "seed": 0,
+    "base_path": "outputs/compare/base/indian_home/Waterbottle_s0.jpg",
+    "lora_path": "outputs/compare/lora/indian_home/Waterbottle_s0.jpg",
+    "pixel_diff": 20.918
+  },
+  {
+    "pair_id": "pair_024",
+    "scene": "indian_home",
+    "product": "Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02",
+    "seed": 0,
+    "base_path": "outputs/compare/base/indian_home/Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02_s0.jpg",
+    "lora_path": "outputs/compare/lora/indian_home/Club_Big_Breakfast_The_Coffee_Club_Riverton_2026_02_s0.jpg",
+    "pixel_diff": 18.317
+  }
+]
